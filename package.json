@@ -1,0 +1,21 @@
+{
+  "name": "spin-the-wheel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-tenant Shopify campaign dashboard and API",
+  "workspaces": [
+    "apps/api",
+    "apps/dashboard"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace apps/api",
+    "dev:api": "npm run dev --workspace apps/api",
+    "dev:dashboard": "npm run dev --workspace apps/dashboard",
+    "build": "npm run build --workspace apps/dashboard",
+    "test": "npm run test --workspace apps/api",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
