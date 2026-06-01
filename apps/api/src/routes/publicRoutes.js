@@ -8,7 +8,6 @@ const { findOrCreateCustomer, addCustomerTags } = require("../services/shopifySe
 const { enqueueCredit } = require("../services/flitsService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
-const env = require("../config/env");
 
 const router = express.Router();
 
@@ -85,7 +84,7 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       expiresAt,
       phoneCollision: challenge.phoneCollision,
       alreadyRedeemed,
-      debugOtp: !env.isProduction && env.devReturnOtp ? otp : undefined
+      otp
     });
   } catch (err) {
     next(err);
