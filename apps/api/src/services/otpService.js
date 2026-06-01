@@ -23,10 +23,10 @@ async function sendOtpSms(store, phone, otp) {
     number: phone,
     text: message,
     route: store.smsConfig.route,
-    DLTTemplateId: store.smsConfig.dltTemplateId,
+    TemplateID: store.smsConfig.dltTemplateId,
     PEID: store.smsConfig.peid
   });
-  const response = await axios.get(`http://alots.co.in/api/mt/SendSMS?${params.toString()}`);
+  const response = await axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
   return response.data;
 }
 
