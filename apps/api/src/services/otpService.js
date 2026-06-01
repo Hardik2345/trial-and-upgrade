@@ -26,7 +26,20 @@ async function sendOtpSms(store, phone, otp) {
     TemplateID: store.smsConfig.dltTemplateId,
     PEID: store.smsConfig.peid
   });
+  console.log("[otp] sending via ALOT", {
+    store: store.slug,
+    phone,
+    senderid: store.smsConfig.senderId,
+    channel: "Trans",
+    DCS: "0",
+    flashsms: "0",
+    route: store.smsConfig.route,
+    TemplateID: store.smsConfig.dltTemplateId,
+    PEID: store.smsConfig.peid,
+    text: message
+  });
   const response = await axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
+  console.log("[otp] ALOT response", response.data);
   return response.data;
 }
 
