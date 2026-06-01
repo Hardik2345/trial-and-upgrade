@@ -12,7 +12,7 @@ async function sendOtpSms(store, phone, otp) {
   }
 
   const axios = require("axios");
-  const message = `Your OTP is ${otp}. Do not share this code with anyone. Valid for 10 minutes.`;
+  const message = `Your OTP for registration on our website https://sosorrysugar.com is ${otp}. Do not share this code with anyone. Valid for 10 minutes only. - Team Sorry Sugar`;
   const params = new URLSearchParams({
     user: store.smsConfig.user,
     password: store.smsConfig.password,
