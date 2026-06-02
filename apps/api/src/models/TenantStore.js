@@ -12,7 +12,8 @@ const TenantStoreSchema = new mongoose.Schema(
       senderId: String,
       route: String,
       dltTemplateId: String,
-      peid: String
+      peid: String,
+      messageTemplate: String
     },
     flitsConfig: {
       customActionUrl: String,

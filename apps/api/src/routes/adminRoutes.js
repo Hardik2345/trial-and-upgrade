@@ -50,7 +50,8 @@ function storeResponse(store, counts = {}) {
       senderId: store.smsConfig?.senderId || "",
       route: store.smsConfig?.route || "",
       dltTemplateId: store.smsConfig?.dltTemplateId || "",
-      peid: store.smsConfig?.peid || ""
+      peid: store.smsConfig?.peid || "",
+      messageTemplate: store.smsConfig?.messageTemplate || ""
     },
     flitsConfig: {
       customActionUrl: store.flitsConfig?.customActionUrl || ""

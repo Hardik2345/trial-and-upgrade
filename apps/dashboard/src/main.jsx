@@ -487,6 +487,13 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
           <Field label="Route"><input value={sms.route || ""} onChange={(event) => setSms({ ...sms, route: event.target.value })} /></Field>
           <Field label="DLT Template ID"><input value={sms.dltTemplateId || ""} onChange={(event) => setSms({ ...sms, dltTemplateId: event.target.value })} /></Field>
           <Field label="PEID"><input value={sms.peid || ""} onChange={(event) => setSms({ ...sms, peid: event.target.value })} /></Field>
+          <Field label="Message Template">
+            <textarea
+              rows={3}
+              value={sms.messageTemplate || ""}
+              onChange={(event) => setSms({ ...sms, messageTemplate: event.target.value })}
+            />
+          </Field>
         </div>
         <button className="mini-button" onClick={() => patch({ smsConfig: sms }, "SMS settings")}>Save SMS</button>
       </section>

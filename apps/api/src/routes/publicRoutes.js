@@ -65,7 +65,7 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       alreadyRedeemed,
       expiresAt
     });
-    await sendOtpSms(store, normalizedPhone, otp);
+    await sendOtpSms(store, normalizedPhone, otp, { name: req.body.name });
     await recordFunnelEvent({
       store,
       campaign,
@@ -83,6 +83,7 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       challengeId: challenge.challengeId,
       expiresAt,
       phoneCollision: challenge.phoneCollision,
+      otp,
       alreadyRedeemed
     });
   } catch (err) {
