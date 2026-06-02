@@ -83,8 +83,7 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       challengeId: challenge.challengeId,
       expiresAt,
       phoneCollision: challenge.phoneCollision,
-      alreadyRedeemed,
-      otp
+      alreadyRedeemed
     });
   } catch (err) {
     next(err);
