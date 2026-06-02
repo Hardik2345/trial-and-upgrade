@@ -443,7 +443,7 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
   const [flits, setFlits] = useState({});
 
   useEffect(() => {
-    setBase({ name: store.name, slug: store.slug, enabled: store.enabled });
+    setBase({ name: store.name, slug: store.slug, enabled: store.enabled, game_enabled: store.game_enabled !== false });
     setShopify({ shopifyDomain: store.shopifyDomain, shopifyAccessToken: "" });
     setSms({ ...(store.smsConfig || {}), password: "" });
     setFlits({ customActionUrl: store.flitsConfig?.customActionUrl || "", apiKey: "" });
@@ -467,6 +467,7 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
           <Field label="Store Name"><input value={base.name || ""} onChange={(event) => setBase({ ...base, name: event.target.value })} /></Field>
           <Field label="Store Slug"><input value={base.slug || ""} onChange={(event) => setBase({ ...base, slug: slugify(event.target.value) })} /></Field>
           <label className="checkbox-field"><input type="checkbox" checked={Boolean(base.enabled)} onChange={(event) => setBase({ ...base, enabled: event.target.checked })} /> Enabled</label>
+          <label className="checkbox-field"><input type="checkbox" checked={Boolean(base.game_enabled)} onChange={(event) => setBase({ ...base, game_enabled: event.target.checked })} /> Game enabled</label>
         </div>
         <button className="mini-button" onClick={() => patch(base, "General settings")}>Save General</button>
       </section>

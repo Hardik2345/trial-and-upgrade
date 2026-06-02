@@ -83,7 +83,6 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       challengeId: challenge.challengeId,
       expiresAt,
       phoneCollision: challenge.phoneCollision,
-      otp,
       alreadyRedeemed
     });
   } catch (err) {
@@ -116,6 +115,40 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         phoneHash: challenge.phoneHash
       }
     });
+    if (store.game_enabled === false) {
+      const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
+      if (!existing?.playedAt) {
+        const participant = await Participant.create({
+          tenantStoreId: store._id,
+          campaignId: campaign._id,
+          name: challenge.name,
+          email: challenge.email,
+          phoneHash: challenge.phoneHash,
+          phoneMasked: challenge.phoneMasked,
+          phoneDisplay: challenge.phoneDisplay,
+          shopifyCustomerId: challenge.shopifyCustomerId,
+          shopifyCustomerGid: challenge.shopifyCustomerGid,
+          eligibilityCustomerId: challenge.eligibilityCustomerId,
+          eligibilityCustomerGid: challenge.eligibilityCustomerGid,
+          phoneCollision: challenge.phoneCollision,
+          reward: {
+            key: `wallet_${campaign.flitsCredit?.value || 0}`,
+            label: "Wallet Credit",
+            value: campaign.flitsCredit?.value || 0
+          },
+          alreadyRedeemed: challenge.alreadyRedeemed,
+          startedAt: challenge.createdAt,
+          otpSentAt: challenge.createdAt,
+          otpVerifiedAt: challenge.verifiedAt,
+          playedAt: new Date()
+        });
+        await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
+        if (!challenge.alreadyRedeemed) {
+          await enqueueCredit({ store, campaign, participant });
+        }
+      }
+      await OtpChallenge.deleteOne({ _id: challenge._id });
+    }
     res.json({ success: true, verified: true });
   } catch (err) {
     next(err);

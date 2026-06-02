@@ -19,6 +19,7 @@ const TenantStoreSchema = new mongoose.Schema(
       customActionUrl: String,
       apiKey: String
     },
+    game_enabled: { type: Boolean, default: true },
     enabled: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null, index: true }
   },

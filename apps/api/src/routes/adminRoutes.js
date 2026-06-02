@@ -34,6 +34,7 @@ function storeResponse(store, counts = {}) {
     name: store.name,
     slug: store.slug,
     shopifyDomain: store.shopifyDomain,
+    game_enabled: store.game_enabled !== false,
     enabled: store.enabled,
     deletedAt: store.deletedAt,
     updatedAt: store.updatedAt,
@@ -171,7 +172,7 @@ router.patch("/stores/:storeId", requireSuperAdmin, async (req, res, next) => {
     const store = await TenantStore.findOne({ _id: req.params.storeId, deletedAt: null });
     if (!store) return res.status(404).json({ error: "Store not found" });
     const body = req.body || {};
-    for (const field of ["name", "slug", "shopifyDomain", "enabled"]) {
+    for (const field of ["name", "slug", "shopifyDomain", "enabled", "game_enabled"]) {
       if (body[field] !== undefined) store[field] = body[field];
     }
     store.smsConfig = store.smsConfig || {};

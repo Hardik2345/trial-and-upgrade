@@ -9,9 +9,16 @@ function clearLock(job) {
   job.lockedBy = undefined;
 }
 
-async function enqueueCredit({ store, campaign, participant }) {
-  if (!campaign.flitsCredit?.enabled) return null;
-  return RewardCreditJob.create({
+async function enqueueCredit({ store, campaign, participant }, { logger = console } = {}) {
+  if (!campaign.flitsCredit?.enabled) {
+    logger.info?.("[flits-queue] credit skipped (disabled)", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id
+    });
+    return null;
+  }
+  const job = await RewardCreditJob.create({
     tenantStoreId: store._id,
     campaignId: campaign._id,
     participantId: participant._id,
@@ -25,6 +32,14 @@ async function enqueueCredit({ store, campaign, participant }) {
       }
     }
   });
+  logger.info?.("[flits-queue] credit queued", {
+    store: store?.slug,
+    campaignId: campaign?._id,
+    participantId: participant?._id,
+    jobId: job?._id,
+    creditValue: job?.payload?.credit_details?.credit_value
+  });
+  return job;
 }
 
 function dueCreditJobFilter({ now = new Date(), lockTtlMs = env.flitsQueueLockTtlMs } = {}) {
@@ -72,8 +87,23 @@ async function processCreditJob(
 ) {
   try {
     if (!store.flitsConfig?.customActionUrl || !store.flitsConfig?.apiKey) {
-      throw new Error("Flits configuration is missing");
+      const err = new Error("Flits configuration is missing");
+      logger.warn?.("[flits-queue] credit blocked (missing config)", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id
+      });
+      throw err;
     }
+    logger.info?.("[flits-queue] credit sending", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      jobId: job?._id,
+      creditValue: job?.payload?.credit_details?.credit_value,
+      attempt: job?.attempts
+    });
     await axiosClient.post(store.flitsConfig.customActionUrl, job.payload, {
       headers: { "x-api-key": store.flitsConfig.apiKey },
       timeout: 15000
@@ -84,6 +114,13 @@ async function processCreditJob(
     job.lastError = "";
     clearLock(job);
     await job.save();
+    logger.info?.("[flits-queue] credit sent", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      jobId: job?._id,
+      sentAt: job?.sentAt
+    });
 
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
     try {
@@ -107,6 +144,15 @@ async function processCreditJob(
     job.nextRunAt = exhausted ? undefined : new Date(Date.now() + Math.min(job.attempts, 5) * 60 * 1000);
     clearLock(job);
     await job.save();
+    logger.warn?.("[flits-queue] credit failed", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      jobId: job?._id,
+      attempts: job?.attempts,
+      exhausted,
+      error: err.message
+    });
     return { status: job.status, error: err };
   }
 }
