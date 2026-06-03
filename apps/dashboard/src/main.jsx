@@ -446,7 +446,14 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
     setBase({ name: store.name, slug: store.slug, enabled: store.enabled, game_enabled: store.game_enabled !== false });
     setShopify({ shopifyDomain: store.shopifyDomain, shopifyAccessToken: "" });
     setSms({ ...(store.smsConfig || {}), password: "" });
-    setFlits({ customActionUrl: store.flitsConfig?.customActionUrl || "", apiKey: "" });
+    setFlits({
+      customActionUrl: store.flitsConfig?.customActionUrl || "",
+      apiKey: "",
+      creditLookupUrl: store.flitsConfig?.creditLookupUrl || "",
+      creditLookupUserId: store.flitsConfig?.creditLookupUserId || "",
+      integrationAppName: store.flitsConfig?.integrationAppName || "",
+      creditLookupToken: ""
+    });
   }, [store?._id]);
 
   async function patch(payload, label) {
@@ -503,6 +510,10 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
         <div className="compact-grid">
           <Field label="Custom Action URL"><input value={flits.customActionUrl || ""} onChange={(event) => setFlits({ ...flits, customActionUrl: event.target.value })} /></Field>
           <Field label="API Key"><input value={flits.apiKey || ""} onChange={(event) => setFlits({ ...flits, apiKey: event.target.value })} type="password" placeholder={store.secrets?.flitsApiKey ? "Saved - hidden" : ""} /></Field>
+          <Field label="Credit Lookup URL"><input value={flits.creditLookupUrl || ""} onChange={(event) => setFlits({ ...flits, creditLookupUrl: event.target.value })} /></Field>
+          <Field label="Integration App Name"><input value={flits.integrationAppName || ""} onChange={(event) => setFlits({ ...flits, integrationAppName: event.target.value })} /></Field>
+          <Field label="User ID"><input value={flits.creditLookupUserId || ""} onChange={(event) => setFlits({ ...flits, creditLookupUserId: event.target.value })} /></Field>
+          <Field label="Token"><input value={flits.creditLookupToken || ""} onChange={(event) => setFlits({ ...flits, creditLookupToken: event.target.value })} type="password" placeholder={store.secrets?.flitsCreditToken ? "Saved - hidden" : ""} /></Field>
         </div>
         <button className="mini-button" onClick={() => patch({ flitsConfig: flits }, "Flits settings")}>Save Flits</button>
       </section>

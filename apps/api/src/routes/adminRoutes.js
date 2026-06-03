@@ -13,7 +13,7 @@ const { toCSV } = require("../utils/csv");
 const router = express.Router();
 router.use(requireAuth);
 
-const secretFields = new Set(["shopifyAccessToken", "smsPassword", "flitsApiKey"]);
+const secretFields = new Set(["shopifyAccessToken", "smsPassword", "flitsApiKey", "flitsCreditToken"]);
 
 function parseDateRange(query) {
   const start = query.startDate ? new Date(query.startDate) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
@@ -44,7 +44,8 @@ function storeResponse(store, counts = {}) {
     secrets: {
       shopifyAccessToken: Boolean(store.shopifyAccessToken),
       smsPassword: Boolean(store.smsConfig?.password),
-      flitsApiKey: Boolean(store.flitsConfig?.apiKey)
+      flitsApiKey: Boolean(store.flitsConfig?.apiKey),
+      flitsCreditToken: Boolean(store.flitsConfig?.creditLookupToken)
     },
     smsConfig: {
       user: store.smsConfig?.user || "",
@@ -55,7 +56,10 @@ function storeResponse(store, counts = {}) {
       messageTemplate: store.smsConfig?.messageTemplate || ""
     },
     flitsConfig: {
-      customActionUrl: store.flitsConfig?.customActionUrl || ""
+      customActionUrl: store.flitsConfig?.customActionUrl || "",
+      creditLookupUrl: store.flitsConfig?.creditLookupUrl || "",
+      creditLookupUserId: store.flitsConfig?.creditLookupUserId || "",
+      integrationAppName: store.flitsConfig?.integrationAppName || ""
     }
   };
 }
@@ -129,10 +133,12 @@ function applySecretPatch(target, patch, clearSecrets = []) {
     if (field === "shopifyAccessToken") target.shopifyAccessToken = "";
     if (field === "smsPassword") target.smsConfig.password = "";
     if (field === "flitsApiKey") target.flitsConfig.apiKey = "";
+    if (field === "flitsCreditToken") target.flitsConfig.creditLookupToken = "";
   }
   if (patch.shopifyAccessToken) target.shopifyAccessToken = patch.shopifyAccessToken;
   if (patch.smsConfig?.password) target.smsConfig.password = patch.smsConfig.password;
   if (patch.flitsConfig?.apiKey) target.flitsConfig.apiKey = patch.flitsConfig.apiKey;
+  if (patch.flitsConfig?.creditLookupToken) target.flitsConfig.creditLookupToken = patch.flitsConfig.creditLookupToken;
 }
 
 router.get("/stores", async (req, res, next) => {
@@ -185,7 +191,8 @@ router.patch("/stores/:storeId", requireSuperAdmin, async (req, res, next) => {
     store.flitsConfig = {
       ...store.flitsConfig,
       ...(body.flitsConfig || {}),
-      apiKey: store.flitsConfig?.apiKey || ""
+      apiKey: store.flitsConfig?.apiKey || "",
+      creditLookupToken: store.flitsConfig?.creditLookupToken || ""
     };
     applySecretPatch(store, body, body.clearSecrets || []);
     await store.save();
