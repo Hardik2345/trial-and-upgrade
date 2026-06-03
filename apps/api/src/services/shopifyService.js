@@ -31,6 +31,12 @@ function numericCustomerId(gid) {
 
 async function findCustomer(store, { email, phone }) {
   const queryText = email ? `email:${email}` : `phone:${phone}`;
+  console.log("[shopify] customer lookup", {
+    store: store?.slug,
+    queryType: email ? "email" : "phone",
+    email: email || null,
+    phone: phone || null
+  });
   const data = await graphql(
     store,
     `query FindCustomer($query: String!) {
@@ -41,12 +47,23 @@ async function findCustomer(store, { email, phone }) {
     { query: queryText }
   );
   const customer = data?.customers?.nodes?.[0];
+  console.log("[shopify] customer lookup result", {
+    store: store?.slug,
+    found: Boolean(customer),
+    customerId: customer ? numericCustomerId(customer.id) : null
+  });
   if (!customer) return null;
   return { ...customer, numericId: numericCustomerId(customer.id) };
 }
 
 async function createCustomer(store, { name, email, phone }) {
   const [firstName, ...rest] = String(name || "").trim().split(/\s+/);
+  console.log("[shopify] customer create request", {
+    store: store?.slug,
+    email: email || null,
+    phone: phone || null,
+    name: name || null
+  });
   const data = await graphql(
     store,
     `mutation CreateCustomer($input: CustomerInput!) {
@@ -59,17 +76,31 @@ async function createCustomer(store, { name, email, phone }) {
   );
   const errors = data?.customerCreate?.userErrors || [];
   if (errors.length) {
+    console.log("[shopify] customer create failed", {
+      store: store?.slug,
+      errors: errors.map((item) => item.message)
+    });
     const error = new Error(errors.map((item) => item.message).join(", "));
     error.status = 502;
     throw error;
   }
   const customer = data?.customerCreate?.customer;
+  console.log("[shopify] customer create result", {
+    store: store?.slug,
+    created: Boolean(customer),
+    customerId: customer ? numericCustomerId(customer.id) : null
+  });
   return customer ? { ...customer, numericId: numericCustomerId(customer.id) } : null;
 }
 
 async function findOrCreateCustomer(store, details) {
   const primaryCustomer = details.email ? await findCustomer(store, { email: details.email }) : null;
   if (primaryCustomer) {
+    console.log("[shopify] customer present", {
+      store: store?.slug,
+      match: "email",
+      customerId: primaryCustomer.numericId
+    });
     return {
       primaryCustomer,
       eligibilityCustomer: primaryCustomer,
@@ -80,6 +111,10 @@ async function findOrCreateCustomer(store, details) {
 
   try {
     const created = await createCustomer(store, details);
+    console.log("[shopify] customer created", {
+      store: store?.slug,
+      customerId: created?.numericId || null
+    });
     return {
       primaryCustomer: created,
       eligibilityCustomer: created,
@@ -90,6 +125,11 @@ async function findOrCreateCustomer(store, details) {
     if (/phone.*taken/i.test(err.message) && details.phone) {
       const phoneCustomer = await findCustomer(store, { phone: details.phone });
       if (phoneCustomer) {
+        console.log("[shopify] customer present", {
+          store: store?.slug,
+          match: "phone",
+          customerId: phoneCustomer.numericId
+        });
         return {
           primaryCustomer: null,
           eligibilityCustomer: phoneCustomer,
@@ -98,6 +138,10 @@ async function findOrCreateCustomer(store, details) {
         };
       }
     }
+    console.log("[shopify] customer create error", {
+      store: store?.slug,
+      message: err?.message || "unknown"
+    });
     throw err;
   }
 }
