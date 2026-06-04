@@ -82,6 +82,77 @@ async function findStoreBySlug(storeSlug) {
   return store;
 }
 
+async function createOrRefreshOtpChallenge({
+  tenantStoreId,
+  campaignId,
+  phoneHash,
+  otpHash,
+  expiresAt,
+  payload = {}
+}) {
+  const filter = {
+    tenantStoreId,
+    phoneHash,
+    verifiedAt: { $exists: false },
+    expiresAt: { $gt: new Date() }
+  };
+  if (campaignId) {
+    filter.campaignId = campaignId;
+  } else {
+    filter.campaignId = { $exists: false };
+  }
+
+  const existing = await OtpChallenge.findOne(filter).sort({ createdAt: -1 });
+  if (existing) {
+    existing.otpHash = otpHash;
+    existing.expiresAt = expiresAt;
+    Object.assign(existing, payload);
+    await existing.save();
+    return existing;
+  }
+
+  return OtpChallenge.create({
+    tenantStoreId,
+    campaignId,
+    challengeId: randomUUID(),
+    phoneHash,
+    otpHash,
+    expiresAt,
+    ...payload
+  });
+}
+
+async function createOrRefreshUserLookupChallenge({
+  tenantStoreId,
+  phoneHash,
+  otpHash,
+  expiresAt,
+  payload = {}
+}) {
+  const existing = await UserLookupOtpChallenge.findOne({
+    tenantStoreId,
+    phoneHash,
+    verifiedAt: { $exists: false },
+    expiresAt: { $gt: new Date() }
+  }).sort({ createdAt: -1 });
+  if (existing) {
+    existing.otpHash = otpHash;
+    existing.expiresAt = expiresAt;
+    Object.assign(existing, payload);
+    await existing.save();
+    return existing;
+  }
+
+  return UserLookupOtpChallenge.create({
+    tenantStoreId,
+    challengeId: randomUUID(),
+    phoneHash,
+    otpHash,
+    expiresAt,
+    ...payload
+  });
+}
+
 router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
   try {
     const { store, campaign } = await findCampaignBySlugs(req.params.storeSlug, req.params.campaignSlug);
@@ -89,17 +160,18 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
     const phoneIdentifier = hashPhone(normalizedPhone, store._id);
     const { otp, otpHash } = buildOtp(campaign.otpLength || 6);
     const expiresAt = new Date(Date.now() + (campaign.otpTtlMinutes || 10) * 60 * 1000);
-    const challenge = await OtpChallenge.create({
+    const challenge = await createOrRefreshOtpChallenge({
       tenantStoreId: store._id,
       campaignId: campaign._id,
-      challengeId: randomUUID(),
       phoneHash: phoneIdentifier,
       otpHash,
-      name: req.body.name,
-      email: req.body.email,
-      phoneMasked: maskPhone(normalizedPhone),
-      phoneDisplay: normalizedPhone,
-      expiresAt
+      expiresAt,
+      payload: {
+        name: req.body.name,
+        email: req.body.email,
+        phoneMasked: maskPhone(normalizedPhone),
+        phoneDisplay: normalizedPhone
+      }
     });
     await sendOtpSms(store, normalizedPhone, otp, { name: req.body.name });
     await recordFunnelEvent({
@@ -156,15 +228,16 @@ router.post("/:storeSlug/user-lookup", async (req, res, next) => {
 
     const { otp, otpHash } = buildOtp(6);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    const challenge = await UserLookupOtpChallenge.create({
+    const challenge = await createOrRefreshUserLookupChallenge({
       tenantStoreId: store._id,
-      challengeId: randomUUID(),
       phoneHash: hashPhone(normalizedPhone, store._id),
       otpHash,
-      phoneDisplay: normalizedPhone,
-      shopifyCustomerId: customer.numericId,
-      shopifyCustomerGid: customer.id,
-      expiresAt
+      expiresAt,
+      payload: {
+        phoneDisplay: normalizedPhone,
+        shopifyCustomerId: customer.numericId,
+        shopifyCustomerGid: customer.id
+      }
     });
     await sendOtpSms(store, normalizedPhone, otp, { name: customerName(customer) });
     const response = {
