@@ -303,7 +303,12 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
     await challenge.save();
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
     if (existing?.playedAt) {
-      return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+      return res.json({
+        success: true,
+        verified: true,
+        alreadyPlayed: true,
+        message: "This mobile number has already played"
+      });
     }
     await hydrateChallengeCustomerContext(store, campaign, challenge);
     await recordFunnelEvent({
