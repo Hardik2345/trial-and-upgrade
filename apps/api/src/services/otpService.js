@@ -1,4 +1,5 @@
 const { sha256, makeOtp } = require("../utils/crypto");
+const SmsDeliveryLog = require("../models/SmsDeliveryLog");
 
 function buildOtp(length) {
   const otp = makeOtp(length);
@@ -32,8 +33,7 @@ function normalizeSmsValue(value) {
 
 function normalizeSmsNumber(phone) {
   const digits = normalizeSmsValue(phone).replace(/\D/g, "");
-  if (digits.length === 10) return `91${digits}`;
-  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
   return digits;
 }
 
@@ -58,6 +58,17 @@ async function sendOtpSms(store, phone, otp, context = {}) {
   const dltTemplateId = normalizeSmsValue(store.smsConfig.dltTemplateId);
   const peid = normalizeSmsValue(store.smsConfig.peid);
   const number = normalizeSmsNumber(phone);
+  const deliveryLog = await SmsDeliveryLog.create({
+    tenantStoreId: store._id,
+    provider: "ALOT",
+    channel: "otp",
+    phone: number,
+    senderId,
+    route,
+    dltTemplateId,
+    peid,
+    submitStatus: "pending"
+  });
   const params = new URLSearchParams({
     user: normalizeSmsValue(store.smsConfig.user),
     password: normalizeSmsValue(store.smsConfig.password),
@@ -69,15 +80,11 @@ async function sendOtpSms(store, phone, otp, context = {}) {
     text: message,
     route,
     TemplateID: dltTemplateId,
-    templateid: dltTemplateId,
-    dlttemplateid: dltTemplateId,
-    PEID: peid,
-    peid,
-    EntityId: peid,
-    entityid: peid
+    PEID: peid
   });
   console.log("[otp] sending via ALOT", {
     store: store.slug,
+    deliveryLogId: deliveryLog._id,
     phone: number,
     senderid: senderId,
     channel: "Trans",
@@ -85,17 +92,25 @@ async function sendOtpSms(store, phone, otp, context = {}) {
     flashsms: "0",
     route,
     TemplateID: dltTemplateId,
-    templateid: dltTemplateId,
-    dlttemplateid: dltTemplateId,
     PEID: peid,
-    peid,
-    EntityId: peid,
-    entityid: peid,
     text: message
   });
   const response = await axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
+  const responseData = response.data || {};
+  const messageData = Array.isArray(responseData.MessageData) ? responseData.MessageData[0] : null;
+  const accepted = responseData.ErrorCode === "000";
+  deliveryLog.submitStatus = accepted ? "submitted" : "rejected";
+  deliveryLog.deliveryStatus = accepted ? "submitted" : "failed";
+  deliveryLog.errorCode = normalizeSmsValue(responseData.ErrorCode);
+  deliveryLog.errorMessage = normalizeSmsValue(responseData.ErrorMessage);
+  deliveryLog.statusText = normalizeSmsValue(responseData.ErrorMessage);
+  deliveryLog.jobId = normalizeSmsValue(responseData.JobId);
+  deliveryLog.messageId = normalizeSmsValue(messageData?.MessageId);
+  deliveryLog.lastProviderUpdateAt = new Date();
+  deliveryLog.providerResponse = responseData;
+  await deliveryLog.save();
   console.log("[otp] ALOT response", response.data);
-  return response.data;
+  return { ...response.data, deliveryLogId: String(deliveryLog._id) };
 }
 
 module.exports = { buildOtp, sendOtpSms };

@@ -6,6 +6,7 @@ const FunnelEvent = require("../models/FunnelEvent");
 const Participant = require("../models/Participant");
 const AdminUser = require("../models/AdminUser");
 const RefreshToken = require("../models/RefreshToken");
+const SmsDeliveryLog = require("../models/SmsDeliveryLog");
 const { requireAuth, requireSuperAdmin, canAccessStore } = require("../middleware/auth");
 const { funnelStages } = require("../services/campaignService");
 const { toCSV } = require("../utils/csv");
@@ -449,6 +450,50 @@ router.get("/participants", async (req, res, next) => {
     const campaign = await requireCampaignAccess(req);
     const participants = await Participant.find({ tenantStoreId: req.query.storeId, campaignId: campaign._id }).sort({ playedAt: -1 }).limit(100);
     res.json({ participants });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/sms-delivery-logs", async (req, res, next) => {
+  try {
+    const storeId = req.query.storeId;
+    if (!storeId) return res.status(400).json({ error: "storeId is required" });
+    if (!canAccessStore(req, storeId)) return res.status(403).json({ error: "Store access denied" });
+
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const filter = { tenantStoreId: storeId };
+    if (req.query.phone) filter.phone = new RegExp(String(req.query.phone).replace(/[^\d]/g, ""));
+    if (req.query.jobId) filter.jobId = String(req.query.jobId);
+    if (req.query.messageId) filter.messageId = String(req.query.messageId);
+    if (req.query.deliveryStatus) filter.deliveryStatus = String(req.query.deliveryStatus);
+
+    const logs = await SmsDeliveryLog.find(filter).sort({ createdAt: -1 }).limit(limit);
+    res.json({
+      logs: logs.map((log) => ({
+        _id: log._id,
+        provider: log.provider,
+        channel: log.channel,
+        phone: log.phone,
+        senderId: log.senderId,
+        route: log.route,
+        dltTemplateId: log.dltTemplateId,
+        peid: log.peid,
+        jobId: log.jobId,
+        messageId: log.messageId,
+        submitStatus: log.submitStatus,
+        deliveryStatus: log.deliveryStatus,
+        statusText: log.statusText,
+        errorCode: log.errorCode,
+        errorMessage: log.errorMessage,
+        deliveredAt: log.deliveredAt,
+        lastProviderUpdateAt: log.lastProviderUpdateAt,
+        createdAt: log.createdAt,
+        updatedAt: log.updatedAt,
+        providerResponse: log.providerResponse,
+        providerCallback: log.providerCallback
+      }))
+    });
   } catch (err) {
     next(err);
   }
