@@ -2,9 +2,13 @@ const express = require("express");
 const { randomUUID } = require("crypto");
 const OtpChallenge = require("../models/OtpChallenge");
 const Participant = require("../models/Participant");
+const TenantStore = require("../models/TenantStore");
+const NewUser = require("../models/NewUser");
+const UserLookupOtpChallenge = require("../models/UserLookupOtpChallenge");
+const env = require("../config/env");
 const { findCampaignBySlugs, pickReward } = require("../services/campaignService");
 const { buildOtp, sendOtpSms } = require("../services/otpService");
-const { findOrCreateCustomer, addCustomerTags } = require("../services/shopifyService");
+const { findOrCreateCustomer, addCustomerTags, findCustomer } = require("../services/shopifyService");
 const { enqueueCredit } = require("../services/flitsService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
@@ -24,6 +28,36 @@ function validateDetails({ name, email, phone }) {
     throw error;
   }
   return normalized;
+}
+
+function validatePhoneOnly({ phone }) {
+  if (!phone) {
+    const error = new Error("phone is required");
+    error.status = 400;
+    throw error;
+  }
+  const normalized = normalizePhone(phone);
+  if (normalized.length < 10) {
+    const error = new Error("A valid mobile number is required");
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
+}
+
+function customerName(customer) {
+  if (!customer) return "";
+  return [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim();
+}
+
+async function findStoreBySlug(storeSlug) {
+  const store = await TenantStore.findOne({ slug: storeSlug, enabled: true, deletedAt: null });
+  if (!store) {
+    const error = new Error("Store not found");
+    error.status = 404;
+    throw error;
+  }
+  return store;
 }
 
 router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
@@ -84,6 +118,94 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       expiresAt,
       phoneCollision: challenge.phoneCollision,
       alreadyRedeemed
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:storeSlug/user-lookup", async (req, res, next) => {
+  try {
+    const store = await findStoreBySlug(req.params.storeSlug);
+    const normalizedPhone = validatePhoneOnly(req.body);
+    const customer = await findCustomer(store, { phone: normalizedPhone });
+    if (!customer) {
+      await NewUser.updateOne(
+        { tenantStoreId: store._id, phoneNormalized: normalizedPhone },
+        {
+          $setOnInsert: {
+            tenantStoreId: store._id,
+            publicId: randomUUID(),
+            phoneNormalized: normalizedPhone,
+            phoneDisplay: normalizedPhone
+          }
+        },
+        { upsert: true }
+      );
+      return res.json({
+        success: true,
+        type: "new",
+        phone: normalizedPhone,
+        name: "",
+        totalPoints: 0,
+        redeemedPoints: 0
+      });
+    }
+
+    const { otp, otpHash } = buildOtp(6);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const challenge = await UserLookupOtpChallenge.create({
+      tenantStoreId: store._id,
+      challengeId: randomUUID(),
+      phoneHash: hashPhone(normalizedPhone, store._id),
+      otpHash,
+      phoneDisplay: normalizedPhone,
+      shopifyCustomerId: customer.numericId,
+      shopifyCustomerGid: customer.id,
+      expiresAt
+    });
+    await sendOtpSms(store, normalizedPhone, otp, { name: customerName(customer) });
+    const response = {
+      success: true,
+      type: "existing",
+      phone: normalizedPhone,
+      name: customerName(customer),
+      challengeId: challenge.challengeId,
+      expiresAt
+    };
+    if (env.devReturnOtp) response.otp = otp;
+    res.json(response);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/:storeSlug/user-lookup/verify", async (req, res, next) => {
+  try {
+    const store = await findStoreBySlug(req.params.storeSlug);
+    if (!req.body.challengeId || !req.body.otp) {
+      const error = new Error("challengeId and otp are required");
+      error.status = 400;
+      throw error;
+    }
+    const challenge = await UserLookupOtpChallenge.findOne({
+      challengeId: req.body.challengeId,
+      tenantStoreId: store._id
+    });
+    if (!challenge) return res.status(404).json({ error: "OTP challenge not found" });
+    if (challenge.expiresAt <= new Date()) return res.status(400).json({ error: "OTP expired" });
+    if (challenge.otpHash !== sha256(req.body.otp || "")) return res.status(400).json({ error: "Invalid OTP" });
+
+    challenge.verifiedAt = new Date();
+    await challenge.save();
+    res.json({
+      success: true,
+      verified: true,
+      type: "existing",
+      phone: challenge.phoneDisplay,
+      name: "",
+      totalPoints: null,
+      redeemedPoints: null
     });
   } catch (err) {
     next(err);
