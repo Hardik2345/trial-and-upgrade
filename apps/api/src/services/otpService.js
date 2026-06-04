@@ -37,6 +37,42 @@ function normalizeSmsNumber(phone) {
   return digits;
 }
 
+function buildAlotParams({
+  user,
+  password,
+  senderId,
+  number,
+  message,
+  route,
+  dltTemplateId,
+  peid,
+  compatibilityMode = false
+}) {
+  const params = {
+    user,
+    password,
+    senderid: senderId,
+    channel: "Trans",
+    DCS: "0",
+    flashsms: "0",
+    number,
+    text: message,
+    route,
+    TemplateID: dltTemplateId,
+    PEID: peid
+  };
+
+  if (compatibilityMode) {
+    params.templateid = dltTemplateId;
+    params.dlttemplateid = dltTemplateId;
+    params.peid = peid;
+    params.EntityId = peid;
+    params.entityid = peid;
+  }
+
+  return new URLSearchParams(params);
+}
+
 async function sendOtpSms(store, phone, otp, context = {}) {
   if (!store.smsConfig?.user || process.env.NODE_ENV !== "production") {
     console.log(`[otp] ${store.slug} ${phone}`);
@@ -58,6 +94,8 @@ async function sendOtpSms(store, phone, otp, context = {}) {
   const dltTemplateId = normalizeSmsValue(store.smsConfig.dltTemplateId);
   const peid = normalizeSmsValue(store.smsConfig.peid);
   const number = normalizeSmsNumber(phone);
+  const user = normalizeSmsValue(store.smsConfig.user);
+  const password = normalizeSmsValue(store.smsConfig.password);
   const deliveryLog = await SmsDeliveryLog.create({
     tenantStoreId: store._id,
     provider: "ALOT",
@@ -69,34 +107,45 @@ async function sendOtpSms(store, phone, otp, context = {}) {
     peid,
     submitStatus: "pending"
   });
-  const params = new URLSearchParams({
-    user: normalizeSmsValue(store.smsConfig.user),
-    password: normalizeSmsValue(store.smsConfig.password),
-    senderid: senderId,
-    channel: "Trans",
-    DCS: "0",
-    flashsms: "0",
-    number,
-    text: message,
-    route,
-    TemplateID: dltTemplateId,
-    PEID: peid
-  });
-  console.log("[otp] sending via ALOT", {
-    store: store.slug,
-    deliveryLogId: deliveryLog._id,
-    phone: number,
-    senderid: senderId,
-    channel: "Trans",
-    DCS: "0",
-    flashsms: "0",
-    route,
-    TemplateID: dltTemplateId,
-    PEID: peid,
-    text: message
-  });
-  const response = await axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
-  const responseData = response.data || {};
+
+  async function submitAlotRequest(compatibilityMode = false) {
+    const params = buildAlotParams({
+      user,
+      password,
+      senderId,
+      number,
+      message,
+      route,
+      dltTemplateId,
+      peid,
+      compatibilityMode
+    });
+    console.log("[otp] sending via ALOT", {
+      store: store.slug,
+      deliveryLogId: deliveryLog._id,
+      compatibilityMode,
+      phone: number,
+      senderid: senderId,
+      channel: "Trans",
+      DCS: "0",
+      flashsms: "0",
+      route,
+      TemplateID: dltTemplateId,
+      PEID: peid,
+      text: message
+    });
+    return axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
+  }
+  let response = await submitAlotRequest(false);
+  let responseData = response.data || {};
+  if (responseData.ErrorCode === "006") {
+    console.log("[otp] ALOT retrying with compatibility parameters", {
+      store: store.slug,
+      deliveryLogId: deliveryLog._id
+    });
+    response = await submitAlotRequest(true);
+    responseData = response.data || {};
+  }
   const messageData = Array.isArray(responseData.MessageData) ? responseData.MessageData[0] : null;
   const accepted = responseData.ErrorCode === "000";
   deliveryLog.submitStatus = accepted ? "submitted" : "rejected";
@@ -109,8 +158,8 @@ async function sendOtpSms(store, phone, otp, context = {}) {
   deliveryLog.lastProviderUpdateAt = new Date();
   deliveryLog.providerResponse = responseData;
   await deliveryLog.save();
-  console.log("[otp] ALOT response", response.data);
-  return { ...response.data, deliveryLogId: String(deliveryLog._id) };
+  console.log("[otp] ALOT response", responseData);
+  return { ...responseData, deliveryLogId: String(deliveryLog._id) };
 }
 
 module.exports = { buildOtp, sendOtpSms };
