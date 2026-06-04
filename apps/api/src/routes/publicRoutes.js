@@ -50,6 +50,28 @@ function customerName(customer) {
   return [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim();
 }
 
+async function hydrateChallengeCustomerContext(store, campaign, challenge) {
+  const shopifyResult = await findOrCreateCustomer(store, {
+    name: challenge.name,
+    email: challenge.email,
+    phone: challenge.phoneDisplay
+  });
+  const eligibilityCustomer = shopifyResult.eligibilityCustomer || shopifyResult.primaryCustomer;
+  const primaryCustomer = shopifyResult.primaryCustomer;
+  const tags = eligibilityCustomer?.tags || [];
+  const alreadyRedeemed = campaign.eligibilityTags.some((tag) => tags.includes(tag));
+
+  challenge.shopifyCustomerId = primaryCustomer?.numericId || "";
+  challenge.shopifyCustomerGid = primaryCustomer?.id || "";
+  challenge.eligibilityCustomerId = eligibilityCustomer?.numericId || "";
+  challenge.eligibilityCustomerGid = eligibilityCustomer?.id || "";
+  challenge.phoneCollision = Boolean(shopifyResult.phoneCollision);
+  challenge.alreadyRedeemed = alreadyRedeemed;
+  await challenge.save();
+
+  return { alreadyRedeemed };
+}
+
 async function findStoreBySlug(storeSlug) {
   const store = await TenantStore.findOne({ slug: storeSlug, enabled: true, deletedAt: null });
   if (!store) {
@@ -65,20 +87,6 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
     const { store, campaign } = await findCampaignBySlugs(req.params.storeSlug, req.params.campaignSlug);
     const normalizedPhone = validateDetails(req.body);
     const phoneIdentifier = hashPhone(normalizedPhone, store._id);
-    const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: phoneIdentifier });
-    if (existing?.playedAt) {
-      return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
-    }
-
-    const shopifyResult = await findOrCreateCustomer(store, {
-      name: req.body.name,
-      email: req.body.email,
-      phone: normalizedPhone
-    });
-    const eligibilityCustomer = shopifyResult.eligibilityCustomer || shopifyResult.primaryCustomer;
-    const primaryCustomer = shopifyResult.primaryCustomer;
-    const tags = eligibilityCustomer?.tags || [];
-    const alreadyRedeemed = campaign.eligibilityTags.some((tag) => tags.includes(tag));
     const { otp, otpHash } = buildOtp(campaign.otpLength || 6);
     const expiresAt = new Date(Date.now() + (campaign.otpTtlMinutes || 10) * 60 * 1000);
     const challenge = await OtpChallenge.create({
@@ -91,12 +99,6 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       email: req.body.email,
       phoneMasked: maskPhone(normalizedPhone),
       phoneDisplay: normalizedPhone,
-      shopifyCustomerId: primaryCustomer?.numericId,
-      shopifyCustomerGid: primaryCustomer?.id,
-      eligibilityCustomerId: eligibilityCustomer?.numericId,
-      eligibilityCustomerGid: eligibilityCustomer?.id,
-      phoneCollision: Boolean(shopifyResult.phoneCollision),
-      alreadyRedeemed,
       expiresAt
     });
     await sendOtpSms(store, normalizedPhone, otp, { name: req.body.name });
@@ -116,8 +118,8 @@ router.post("/:storeSlug/:campaignSlug/start", async (req, res, next) => {
       success: true,
       challengeId: challenge.challengeId,
       expiresAt,
-      phoneCollision: challenge.phoneCollision,
-      alreadyRedeemed
+      phoneCollision: false,
+      alreadyRedeemed: false
     });
   } catch (err) {
     next(err);
@@ -226,6 +228,11 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
 
     challenge.verifiedAt = new Date();
     await challenge.save();
+    const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
+    if (existing?.playedAt) {
+      return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    }
+    await hydrateChallengeCustomerContext(store, campaign, challenge);
     await recordFunnelEvent({
       store,
       campaign,
@@ -288,6 +295,9 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
     if (!challenge || !challenge.verifiedAt) return res.status(401).json({ error: "OTP verification required" });
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
     if (existing?.playedAt) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (!challenge.eligibilityCustomerId && !challenge.shopifyCustomerId) {
+      await hydrateChallengeCustomerContext(store, campaign, challenge);
+    }
 
     const reward = pickReward(campaign);
     const participant = await Participant.create({
