@@ -11,8 +11,8 @@ function renderSmsTemplate(template, data) {
   for (const [key, value] of Object.entries(data || {})) {
     normalized[String(key).toLowerCase()] = value;
   }
-  return template.replace(/{{\s*([\w.-]+)\s*}}|{\s*([\w.-]+)\s*}/g, (match, doubleKey, singleKey) => {
-    const key = String(doubleKey || singleKey || "").toLowerCase();
+  return template.replace(/\$\{\s*([\w.-]+)\s*\}|{{\s*([\w.-]+)\s*}}|{\s*([\w.-]+)\s*}/g, (match, dollarKey, doubleKey, singleKey) => {
+    const key = String(dollarKey || doubleKey || singleKey || "").toLowerCase();
     if (!Object.prototype.hasOwnProperty.call(normalized, key)) return match;
     const value = normalized[key];
     if (value === undefined || value === null) return match;
@@ -23,6 +23,18 @@ function renderSmsTemplate(template, data) {
 function resolveStoreSiteUrl(store) {
   if (store?.shopifyDomain) return `https://${store.shopifyDomain}`;
   return "https://sosorrysugar.com";
+}
+
+function normalizeSmsValue(value) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim();
+}
+
+function normalizeSmsNumber(phone) {
+  const digits = normalizeSmsValue(phone).replace(/\D/g, "");
+  if (digits.length === 10) return `91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return digits;
+  return digits;
 }
 
 async function sendOtpSms(store, phone, otp, context = {}) {
@@ -41,29 +53,45 @@ async function sendOtpSms(store, phone, otp, context = {}) {
         siteUrl: resolveStoreSiteUrl(store)
       })
     : `Your OTP for registration on our website https://sosorrysugar.com is ${otp}. Do not share this code with anyone. Valid for 10 minutes only. - Team Sorry Sugar`;
+  const senderId = normalizeSmsValue(store.smsConfig.senderId);
+  const route = normalizeSmsValue(store.smsConfig.route);
+  const dltTemplateId = normalizeSmsValue(store.smsConfig.dltTemplateId);
+  const peid = normalizeSmsValue(store.smsConfig.peid);
+  const number = normalizeSmsNumber(phone);
   const params = new URLSearchParams({
-    user: store.smsConfig.user,
-    password: store.smsConfig.password,
-    senderid: store.smsConfig.senderId,
+    user: normalizeSmsValue(store.smsConfig.user),
+    password: normalizeSmsValue(store.smsConfig.password),
+    senderid: senderId,
     channel: "Trans",
     DCS: "0",
     flashsms: "0",
-    number: phone,
+    number,
     text: message,
-    route: store.smsConfig.route,
-    TemplateID: store.smsConfig.dltTemplateId,
-    PEID: store.smsConfig.peid
+    route,
+    TemplateID: dltTemplateId,
+    templateid: dltTemplateId,
+    dlttemplateid: dltTemplateId,
+    PEID: peid,
+    peid,
+    EntityId: peid,
+    entityid: peid
   });
   console.log("[otp] sending via ALOT", {
     store: store.slug,
-    phone,
-    senderid: store.smsConfig.senderId,
+    phone: number,
+    senderid: senderId,
     channel: "Trans",
     DCS: "0",
     flashsms: "0",
-    route: store.smsConfig.route,
-    TemplateID: store.smsConfig.dltTemplateId,
-    PEID: store.smsConfig.peid
+    route,
+    TemplateID: dltTemplateId,
+    templateid: dltTemplateId,
+    dlttemplateid: dltTemplateId,
+    PEID: peid,
+    peid,
+    EntityId: peid,
+    entityid: peid,
+    text: message
   });
   const response = await axios.get(`https://alots.co.in/api/mt/SendSMS?${params.toString()}`);
   console.log("[otp] ALOT response", response.data);
