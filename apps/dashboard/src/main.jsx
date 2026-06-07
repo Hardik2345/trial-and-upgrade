@@ -452,6 +452,7 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
       creditLookupUrl: store.flitsConfig?.creditLookupUrl || "",
       creditLookupUserId: store.flitsConfig?.creditLookupUserId || "",
       integrationAppName: store.flitsConfig?.integrationAppName || "",
+      flitsEligibleTags: formatTags(store.flitsConfig?.flitsEligibleTags || []),
       creditLookupToken: ""
     });
   }, [store?._id]);
@@ -513,9 +514,10 @@ function StoreSettings({ store, onSaved, showNotice, setError }) {
           <Field label="Credit Lookup URL"><input value={flits.creditLookupUrl || ""} onChange={(event) => setFlits({ ...flits, creditLookupUrl: event.target.value })} /></Field>
           <Field label="Integration App Name"><input value={flits.integrationAppName || ""} onChange={(event) => setFlits({ ...flits, integrationAppName: event.target.value })} /></Field>
           <Field label="User ID"><input value={flits.creditLookupUserId || ""} onChange={(event) => setFlits({ ...flits, creditLookupUserId: event.target.value })} /></Field>
+          <Field label="Flits Eligible Tags"><input value={flits.flitsEligibleTags || ""} onChange={(event) => setFlits({ ...flits, flitsEligibleTags: event.target.value })} placeholder="gold, flits-user" /></Field>
           <Field label="Token"><input value={flits.creditLookupToken || ""} onChange={(event) => setFlits({ ...flits, creditLookupToken: event.target.value })} type="password" placeholder={store.secrets?.flitsCreditToken ? "Saved - hidden" : ""} /></Field>
         </div>
-        <button className="mini-button" onClick={() => patch({ flitsConfig: flits }, "Flits settings")}>Save Flits</button>
+        <button className="mini-button" onClick={() => patch({ flitsConfig: { ...flits, flitsEligibleTags: parseTags(flits.flitsEligibleTags) } }, "Flits settings")}>Save Flits</button>
       </section>
     </div>
   );

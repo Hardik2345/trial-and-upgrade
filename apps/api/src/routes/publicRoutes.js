@@ -8,8 +8,9 @@ const UserLookupOtpChallenge = require("../models/UserLookupOtpChallenge");
 const env = require("../config/env");
 const { findCampaignBySlugs, pickReward } = require("../services/campaignService");
 const { buildOtp, sendOtpSms } = require("../services/otpService");
-const { findOrCreateCustomer, addCustomerTags, findCustomer } = require("../services/shopifyService");
+const { findOrCreateCustomer, addCustomerTags, resolveUserLookupCustomer } = require("../services/shopifyService");
 const { enqueueCredit } = require("../services/flitsService");
+const { lookupFlitsCredits } = require("../services/flitsLookupService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
 
@@ -202,7 +203,11 @@ router.post("/:storeSlug/user-lookup", async (req, res, next) => {
   try {
     const store = await findStoreBySlug(req.params.storeSlug);
     const normalizedPhone = validatePhoneOnly(req.body);
-    const customer = await findCustomer(store, { phone: normalizedPhone });
+    const customer = await resolveUserLookupCustomer(store, {
+      phone: normalizedPhone,
+      email: req.body.email,
+      flitsEligibleTags: store.flitsConfig?.flitsEligibleTags || []
+    });
     if (!customer) {
       await NewUser.updateOne(
         { tenantStoreId: store._id, phoneNormalized: normalizedPhone },
@@ -273,14 +278,17 @@ router.post("/:storeSlug/user-lookup/verify", async (req, res, next) => {
 
     challenge.verifiedAt = new Date();
     await challenge.save();
+    const { totalPoints, redeemedPoints } = await lookupFlitsCredits(store, {
+      shopifyCustomerId: challenge.shopifyCustomerId
+    });
     res.json({
       success: true,
       verified: true,
       type: "existing",
       phone: challenge.phoneDisplay,
       name: "",
-      totalPoints: null,
-      redeemedPoints: null
+      totalPoints,
+      redeemedPoints
     });
   } catch (err) {
     next(err);

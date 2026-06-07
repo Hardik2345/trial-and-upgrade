@@ -29,6 +29,17 @@ function numericCustomerId(gid) {
   return String(gid || "").split("/").pop();
 }
 
+function normalizeTagList(tags) {
+  return (tags || []).map((tag) => String(tag).trim()).filter(Boolean);
+}
+
+function customerHasAnyTag(customer, tags) {
+  const normalizedTags = normalizeTagList(tags).map((tag) => tag.toLowerCase());
+  if (!normalizedTags.length) return false;
+  const customerTags = normalizeTagList(customer?.tags).map((tag) => tag.toLowerCase());
+  return normalizedTags.some((tag) => customerTags.includes(tag));
+}
+
 async function findCustomer(store, { email, phone }) {
   const queryText = email ? `email:${email}` : `phone:${phone}`;
   console.log("[shopify] customer lookup", {
@@ -54,6 +65,90 @@ async function findCustomer(store, { email, phone }) {
   });
   if (!customer) return null;
   return { ...customer, numericId: numericCustomerId(customer.id) };
+}
+
+async function findCustomers(store, { email, phone, limit = 10 }) {
+  const queryText = email ? `email:${email}` : `phone:${phone}`;
+  console.log("[shopify] customer lookup", {
+    store: store?.slug,
+    queryType: email ? "email" : "phone",
+    email: email || null,
+    phone: phone || null
+  });
+  const data = await graphql(
+    store,
+    `query FindCustomers($query: String!, $limit: Int!) {
+      customers(first: $limit, query: $query) {
+        nodes { id email phone tags firstName lastName }
+      }
+    }`,
+    { query: queryText, limit }
+  );
+  const customers = (data?.customers?.nodes || []).map((customer) => ({
+    ...customer,
+    numericId: numericCustomerId(customer.id)
+  }));
+  console.log("[shopify] customer lookup result", {
+    store: store?.slug,
+    found: customers.length > 0,
+    count: customers.length,
+    customerIds: customers.map((customer) => customer.numericId)
+  });
+  return customers;
+}
+
+async function resolveUserLookupCustomer(store, { phone, email, flitsEligibleTags = [] }) {
+  const candidates = await findCustomers(store, { phone, limit: 20 });
+  if (!candidates.length) return null;
+
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const emailMatches = normalizedEmail
+    ? candidates.filter((customer) => String(customer.email || "").trim().toLowerCase() === normalizedEmail)
+    : [];
+  const taggedEmailMatch = emailMatches.find((customer) => customerHasAnyTag(customer, flitsEligibleTags));
+  if (taggedEmailMatch) {
+    console.log("[shopify] customer present", {
+      store: store?.slug,
+      match: "phone+email+flits-tags",
+      customerId: taggedEmailMatch.numericId
+    });
+    return taggedEmailMatch;
+  }
+
+  if (emailMatches.length === 1) {
+    console.log("[shopify] customer present", {
+      store: store?.slug,
+      match: "phone+email",
+      customerId: emailMatches[0].numericId
+    });
+    return emailMatches[0];
+  }
+
+  const taggedCandidate = candidates.find((customer) => customerHasAnyTag(customer, flitsEligibleTags));
+  if (taggedCandidate) {
+    console.log("[shopify] customer present", {
+      store: store?.slug,
+      match: "phone+flits-tags",
+      customerId: taggedCandidate.numericId
+    });
+    return taggedCandidate;
+  }
+
+  if (emailMatches.length) {
+    console.log("[shopify] customer present", {
+      store: store?.slug,
+      match: "phone+email-fallback",
+      customerId: emailMatches[0].numericId
+    });
+    return emailMatches[0];
+  }
+
+  console.log("[shopify] customer present", {
+    store: store?.slug,
+    match: "phone",
+    customerId: candidates[0].numericId
+  });
+  return candidates[0];
 }
 
 async function createCustomer(store, { name, email, phone }) {
@@ -167,4 +262,4 @@ async function addCustomerTags(store, customerGid, tags) {
   return data?.tagsAdd?.node;
 }
 
-module.exports = { findCustomer, findOrCreateCustomer, addCustomerTags, numericCustomerId };
+module.exports = { findCustomer, findCustomers, resolveUserLookupCustomer, findOrCreateCustomer, addCustomerTags, numericCustomerId };

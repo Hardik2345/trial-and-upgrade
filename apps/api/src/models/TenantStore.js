@@ -21,7 +21,8 @@ const TenantStoreSchema = new mongoose.Schema(
       creditLookupUrl: String,
       creditLookupToken: String,
       creditLookupUserId: String,
-      integrationAppName: String
+      integrationAppName: String,
+      flitsEligibleTags: { type: [String], default: [] }
     },
     game_enabled: { type: Boolean, default: true },
     enabled: { type: Boolean, default: true },

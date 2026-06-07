@@ -60,7 +60,8 @@ function storeResponse(store, counts = {}) {
       customActionUrl: store.flitsConfig?.customActionUrl || "",
       creditLookupUrl: store.flitsConfig?.creditLookupUrl || "",
       creditLookupUserId: store.flitsConfig?.creditLookupUserId || "",
-      integrationAppName: store.flitsConfig?.integrationAppName || ""
+      integrationAppName: store.flitsConfig?.integrationAppName || "",
+      flitsEligibleTags: store.flitsConfig?.flitsEligibleTags || []
     }
   };
 }
