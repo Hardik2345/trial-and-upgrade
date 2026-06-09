@@ -2,6 +2,7 @@ const axios = require("axios");
 const RewardCreditJob = require("../models/RewardCreditJob");
 const { recordFunnelEvent } = require("./funnelService");
 const { addCustomerTags } = require("./shopifyService");
+const { lookupFlitsCredits } = require("./flitsLookupService");
 const env = require("../config/env");
 
 function clearLock(job) {
@@ -121,6 +122,34 @@ async function processCreditJob(
       jobId: job?._id,
       sentAt: job?.sentAt
     });
+
+    const flitsCustomerId = participant.shopifyCustomerId || participant.eligibilityCustomerId;
+    if (flitsCustomerId) {
+      try {
+        const { totalPoints, redeemedPoints, customer } = await lookupFlitsCredits(store, {
+          shopifyCustomerId: flitsCustomerId
+        }, { axiosClient, logger });
+        logger.info?.("[flits-queue] credit verification", {
+          store: store?.slug,
+          campaignId: campaign?._id,
+          participantId: participant?._id,
+          jobId: job?._id,
+          shopifyCustomerId: String(flitsCustomerId),
+          customerFound: Boolean(customer),
+          totalPoints,
+          redeemedPoints
+        });
+      } catch (lookupErr) {
+        logger.warn?.("[flits-queue] credit verification failed", {
+          store: store?.slug,
+          campaignId: campaign?._id,
+          participantId: participant?._id,
+          jobId: job?._id,
+          shopifyCustomerId: String(flitsCustomerId),
+          error: lookupErr.message
+        });
+      }
+    }
 
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
     try {
