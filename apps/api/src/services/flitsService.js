@@ -10,6 +10,14 @@ function clearLock(job) {
   job.lockedBy = undefined;
 }
 
+function formatFlitsPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  return phone;
+}
+
 async function enqueueCredit({ store, campaign, participant }, { logger = console } = {}) {
   if (!campaign.flitsCredit?.enabled) {
     logger.info?.("[flits-queue] credit skipped (disabled)", {
@@ -27,9 +35,12 @@ async function enqueueCredit({ store, campaign, participant }, { logger = consol
     nextRunAt: new Date(),
     payload: {
       customer_email: participant.email,
+      customer_phone: formatFlitsPhone(participant.phoneDisplay),
+      shopify_customer_id: participant.shopifyCustomerId || participant.eligibilityCustomerId || "",
       credit_details: {
         credit_value: participant.reward?.value || campaign.flitsCredit.value,
-        comment_text: campaign.flitsCredit.commentText
+        comment_text: campaign.flitsCredit.commentText,
+        time_upto: -1
       }
     }
   });
