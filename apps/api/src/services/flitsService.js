@@ -18,6 +18,17 @@ function formatFlitsPhone(phone) {
   return phone;
 }
 
+function summarizeCreditPayload(payload) {
+  return {
+    customer_email: payload?.customer_email || "",
+    customer_phone: payload?.customer_phone || "",
+    shopify_customer_id: payload?.shopify_customer_id || "",
+    credit_value: payload?.credit_details?.credit_value,
+    comment_text: payload?.credit_details?.comment_text || "",
+    time_upto: payload?.credit_details?.time_upto
+  };
+}
+
 async function enqueueCredit({ store, campaign, participant }, { logger = console } = {}) {
   if (!campaign.flitsCredit?.enabled) {
     logger.info?.("[flits-queue] credit skipped (disabled)", {
@@ -43,6 +54,12 @@ async function enqueueCredit({ store, campaign, participant }, { logger = consol
         time_upto: -1
       }
     }
+  });
+  logger.info?.("[flits-queue] credit payload prepared", {
+    store: store?.slug,
+    campaignId: campaign?._id,
+    participantId: participant?._id,
+    payload: summarizeCreditPayload(job.payload)
   });
   logger.info?.("[flits-queue] credit queued", {
     store: store?.slug,
@@ -114,11 +131,24 @@ async function processCreditJob(
       participantId: participant?._id,
       jobId: job?._id,
       creditValue: job?.payload?.credit_details?.credit_value,
-      attempt: job?.attempts
+      attempt: job?.attempts,
+      identifiers: {
+        customer_email: job?.payload?.customer_email || "",
+        customer_phone: job?.payload?.customer_phone || "",
+        shopify_customer_id: job?.payload?.shopify_customer_id || ""
+      }
     });
-    await axiosClient.post(store.flitsConfig.customActionUrl, job.payload, {
+    const response = await axiosClient.post(store.flitsConfig.customActionUrl, job.payload, {
       headers: { "x-api-key": store.flitsConfig.apiKey },
       timeout: 15000
+    });
+    logger.info?.("[flits-queue] credit endpoint response", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      jobId: job?._id,
+      status: response?.status || null,
+      data: response?.data || null
     });
     job.status = "sent";
     job.sentAt = new Date();
@@ -164,13 +194,40 @@ async function processCreditJob(
 
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
     try {
+      logger.info?.("[flits-queue] credit tagging shopify customer", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id,
+        customerGid: tagTargetGid || "",
+        tags: ["credited"]
+      });
       await addTags(store, tagTargetGid, ["credited"]);
+      logger.info?.("[flits-queue] credit tagged shopify customer", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id
+      });
     } catch (tagErr) {
       logger.warn?.(`[flits-queue] Credit sent but Shopify credited tag failed for job ${job._id}: ${tagErr.message}`);
     }
 
     try {
+      logger.info?.("[flits-queue] credit recording funnel event", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id,
+        eventType: "reward_credited"
+      });
       await recordEvent({ store, campaign, participant, eventType: "reward_credited" });
+      logger.info?.("[flits-queue] credit recorded funnel event", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id
+      });
     } catch (eventErr) {
       logger.warn?.(`[flits-queue] Credit sent but reward_credited event failed for job ${job._id}: ${eventErr.message}`);
     }
