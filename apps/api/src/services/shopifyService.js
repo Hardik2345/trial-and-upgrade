@@ -97,6 +97,22 @@ async function findCustomers(store, { email, phone, limit = 10 }) {
   return customers;
 }
 
+async function getCustomerByGid(store, customerGid) {
+  if (!customerGid) return null;
+  const data = await graphql(
+    store,
+    `query GetCustomer($id: ID!) {
+      customer(id: $id) {
+        id email phone tags firstName lastName
+      }
+    }`,
+    { id: customerGid }
+  );
+  const customer = data?.customer;
+  if (!customer) return null;
+  return { ...customer, numericId: numericCustomerId(customer.id) };
+}
+
 async function resolveUserLookupCustomer(store, { phone, email, flitsEligibleTags = [] }) {
   const candidates = await findCustomers(store, { phone, limit: 20 });
   if (!candidates.length) return null;
@@ -262,4 +278,4 @@ async function addCustomerTags(store, customerGid, tags) {
   return data?.tagsAdd?.node;
 }
 
-module.exports = { findCustomer, findCustomers, resolveUserLookupCustomer, findOrCreateCustomer, addCustomerTags, numericCustomerId };
+module.exports = { findCustomer, findCustomers, getCustomerByGid, resolveUserLookupCustomer, findOrCreateCustomer, addCustomerTags, numericCustomerId };

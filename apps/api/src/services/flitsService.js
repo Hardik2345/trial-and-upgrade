@@ -1,9 +1,13 @@
 const axios = require("axios");
 const RewardCreditJob = require("../models/RewardCreditJob");
 const { recordFunnelEvent } = require("./funnelService");
-const { addCustomerTags } = require("./shopifyService");
+const { addCustomerTags, getCustomerByGid } = require("./shopifyService");
 const { lookupFlitsCredits } = require("./flitsLookupService");
 const env = require("../config/env");
+
+const CUSTOM_CREDIT_LIMIT_STORE_DOMAINS = new Set(["skincarepersonaltouch.myshopify.com"]);
+const ELIGIBLE_QUANTITY_TAG_PREFIX = "eligible-qty-";
+const MAX_CUSTOM_CREDIT_LIMIT = 2;
 
 function clearLock(job) {
   job.lockedAt = undefined;
@@ -20,7 +24,6 @@ function formatFlitsPhone(phone) {
 
 function summarizeCreditPayload(payload) {
   return {
-    customer_email: payload?.customer_email || "",
     customer_phone: payload?.customer_phone || "",
     shopify_customer_id: payload?.shopify_customer_id || "",
     credit_value: payload?.credit_details?.credit_value,
@@ -29,7 +32,66 @@ function summarizeCreditPayload(payload) {
   };
 }
 
-async function enqueueCredit({ store, campaign, participant }, { logger = console } = {}) {
+function parseEligibleQuantityTag(tags) {
+  for (const tag of tags || []) {
+    const normalized = String(tag || "").trim().toLowerCase();
+    if (!normalized.startsWith(ELIGIBLE_QUANTITY_TAG_PREFIX)) continue;
+    const rawQuantity = normalized.slice(ELIGIBLE_QUANTITY_TAG_PREFIX.length);
+    if (!/^\d+$/.test(rawQuantity)) continue;
+    const quantity = Number(rawQuantity);
+    if (Number.isInteger(quantity) && quantity >= 1 && quantity <= MAX_CUSTOM_CREDIT_LIMIT) return quantity;
+  }
+  return null;
+}
+
+function isCustomCreditLimitStore(store) {
+  return CUSTOM_CREDIT_LIMIT_STORE_DOMAINS.has(String(store?.shopifyDomain || "").trim().toLowerCase());
+}
+
+function creditUsageFilter({ store, participant }) {
+  const customerId = participant.shopifyCustomerId || participant.eligibilityCustomerId || "";
+  const customerPhone = formatFlitsPhone(participant.phoneDisplay);
+  const identifiers = [];
+  if (customerId) identifiers.push({ "payload.shopify_customer_id": customerId });
+  if (customerPhone) identifiers.push({ "payload.customer_phone": customerPhone });
+
+  return {
+    tenantStoreId: store._id,
+    status: { $in: ["pending", "processing", "failed", "sent"] },
+    ...(identifiers.length ? { $or: identifiers } : { _id: null })
+  };
+}
+
+async function customCreditLimitDecision(
+  { store, participant },
+  { JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid, logger = console } = {}
+) {
+  if (!isCustomCreditLimitStore(store)) return { applies: false, allowed: true };
+
+  const customerGid = participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
+  const customer = await fetchCustomerByGid(store, customerGid);
+  const eligibleQuantity = parseEligibleQuantityTag(customer?.tags || []);
+  if (!eligibleQuantity) {
+    return { applies: true, allowed: false, reason: "missing_eligible_quantity_tag", eligibleQuantity: null, usedCredits: 0 };
+  }
+
+  const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
+  const allowed = usedCredits < eligibleQuantity;
+  logger.info?.("[flits-queue] custom credit limit checked", {
+    store: store?.slug,
+    participantId: participant?._id,
+    customerGid: customerGid || "",
+    eligibleQuantity,
+    usedCredits,
+    allowed
+  });
+  return { applies: true, allowed, reason: allowed ? "under_limit" : "limit_reached", eligibleQuantity, usedCredits };
+}
+
+async function enqueueCredit(
+  { store, campaign, participant },
+  { logger = console, JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid } = {}
+) {
   if (!campaign.flitsCredit?.enabled) {
     logger.info?.("[flits-queue] credit skipped (disabled)", {
       store: store?.slug,
@@ -38,14 +100,29 @@ async function enqueueCredit({ store, campaign, participant }, { logger = consol
     });
     return null;
   }
-  const job = await RewardCreditJob.create({
+  const creditLimit = await customCreditLimitDecision(
+    { store, participant },
+    { JobModel, fetchCustomerByGid, logger }
+  );
+  if (creditLimit.applies && !creditLimit.allowed) {
+    logger.info?.("[flits-queue] credit skipped (custom limit)", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      reason: creditLimit.reason,
+      eligibleQuantity: creditLimit.eligibleQuantity,
+      usedCredits: creditLimit.usedCredits
+    });
+    return null;
+  }
+
+  const job = await JobModel.create({
     tenantStoreId: store._id,
     campaignId: campaign._id,
     participantId: participant._id,
     status: "pending",
     nextRunAt: new Date(),
     payload: {
-      customer_email: participant.email,
       customer_phone: formatFlitsPhone(participant.phoneDisplay),
       shopify_customer_id: participant.shopifyCustomerId || participant.eligibilityCustomerId || "",
       credit_details: {
@@ -133,7 +210,6 @@ async function processCreditJob(
       creditValue: job?.payload?.credit_details?.credit_value,
       attempt: job?.attempts,
       identifiers: {
-        customer_email: job?.payload?.customer_email || "",
         customer_phone: job?.payload?.customer_phone || "",
         shopify_customer_id: job?.payload?.shopify_customer_id || ""
       }
@@ -254,4 +330,12 @@ async function processCreditJob(
   }
 }
 
-module.exports = { enqueueCredit, dueCreditJobFilter, claimCreditJob, processCreditJob };
+module.exports = {
+  enqueueCredit,
+  dueCreditJobFilter,
+  claimCreditJob,
+  processCreditJob,
+  parseEligibleQuantityTag,
+  isCustomCreditLimitStore,
+  customCreditLimitDecision
+};

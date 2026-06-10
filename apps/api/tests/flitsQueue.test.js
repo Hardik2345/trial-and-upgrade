@@ -1,6 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { dueCreditJobFilter, claimCreditJob, processCreditJob } = require("../src/services/flitsService");
+const {
+  enqueueCredit,
+  dueCreditJobFilter,
+  claimCreditJob,
+  processCreditJob,
+  parseEligibleQuantityTag,
+  customCreditLimitDecision
+} = require("../src/services/flitsService");
 const { runFlitsQueueTick } = require("../src/services/flitsQueue");
 
 function makeJob(overrides = {}) {
@@ -51,6 +58,177 @@ test("claimCreditJob atomically marks a due job as processing", async () => {
   assert.equal(captured.update.$set.lockedBy, "worker-1");
   assert.deepEqual(captured.update.$inc, { attempts: 1 });
   assert.deepEqual(captured.options, { sort: { nextRunAt: 1, createdAt: 1 }, new: true });
+});
+
+test("parseEligibleQuantityTag accepts only hard-capped eligible quantity tags", () => {
+  assert.equal(parseEligibleQuantityTag(["eligible-qty-1"]), 1);
+  assert.equal(parseEligibleQuantityTag(["Eligible-Qty-2"]), 2);
+  assert.equal(parseEligibleQuantityTag(["eligible-qty-3"]), null);
+  assert.equal(parseEligibleQuantityTag(["eligible-qty-x"]), null);
+  assert.equal(parseEligibleQuantityTag(["played"]), null);
+});
+
+test("custom credit limit does not affect other stores", async () => {
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", shopifyDomain: "other.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerGid: "gid://shopify/Customer/1" }
+    },
+    {
+      fetchCustomerByGid: async () => {
+        throw new Error("should not fetch customer for other stores");
+      }
+    }
+  );
+
+  assert.deepEqual(decision, { applies: false, allowed: true });
+});
+
+test("custom credit limit does not affect SorrySugar", async () => {
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", slug: "sorrysugar", shopifyDomain: "em52un-mk.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerGid: "gid://shopify/Customer/1" }
+    },
+    {
+      fetchCustomerByGid: async () => {
+        throw new Error("should not fetch customer for SorrySugar");
+      }
+    }
+  );
+
+  assert.deepEqual(decision, { applies: false, allowed: true });
+});
+
+test("custom credit limit blocks skincare customer without eligible quantity tag", async () => {
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerGid: "gid://shopify/Customer/1" }
+    },
+    {
+      fetchCustomerByGid: async () => ({ tags: ["played"] })
+    }
+  );
+
+  assert.equal(decision.applies, true);
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "missing_eligible_quantity_tag");
+});
+
+test("custom credit limit allows skincare customer while under quantity", async () => {
+  let capturedFilter;
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: {
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "1",
+        shopifyCustomerGid: "gid://shopify/Customer/1"
+      }
+    },
+    {
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2"] }),
+      JobModel: {
+        async countDocuments(filter) {
+          capturedFilter = filter;
+          return 1;
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.eligibleQuantity, 2);
+  assert.equal(decision.usedCredits, 1);
+  assert.deepEqual(capturedFilter.status.$in, ["pending", "processing", "failed", "sent"]);
+  assert.deepEqual(capturedFilter.$or, [
+    { "payload.shopify_customer_id": "1" },
+    { "payload.customer_phone": "+919967833007" }
+  ]);
+});
+
+test("custom credit limit blocks skincare customer at quantity", async () => {
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: {
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "1",
+        shopifyCustomerGid: "gid://shopify/Customer/1"
+      }
+    },
+    {
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1"] }),
+      JobModel: { countDocuments: async () => 1 },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "limit_reached");
+  assert.equal(decision.eligibleQuantity, 1);
+  assert.equal(decision.usedCredits, 1);
+});
+
+test("enqueueCredit skips creating job when custom credit limit blocks", async () => {
+  let createCalled = false;
+  const job = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        shopifyCustomerGid: "gid://shopify/Customer/1",
+        reward: { value: 399 }
+      }
+    },
+    {
+      fetchCustomerByGid: async () => ({ tags: [] }),
+      JobModel: {
+        countDocuments: async () => 0,
+        create: async () => {
+          createCalled = true;
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(job, null);
+  assert.equal(createCalled, false);
+});
+
+test("enqueueCredit sends Flits payload without customer email", async () => {
+  let captured;
+  await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "other", shopifyDomain: "other.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        email: "hardikparikh19@gmail.com",
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "123",
+        reward: { value: 399 }
+      }
+    },
+    {
+      JobModel: {
+        create: async (payload) => {
+          captured = payload;
+          return payload;
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(captured.payload.customer_email, undefined);
+  assert.equal(captured.payload.customer_phone, "+919967833007");
+  assert.equal(captured.payload.shopify_customer_id, "123");
 });
 
 test("runFlitsQueueTick drains due jobs while respecting max concurrency", async () => {

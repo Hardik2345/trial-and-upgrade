@@ -9,7 +9,7 @@ const env = require("../config/env");
 const { findCampaignBySlugs, pickReward } = require("../services/campaignService");
 const { buildOtp, sendOtpSms } = require("../services/otpService");
 const { findOrCreateCustomer, addCustomerTags, resolveUserLookupCustomer } = require("../services/shopifyService");
-const { enqueueCredit } = require("../services/flitsService");
+const { enqueueCredit, isCustomCreditLimitStore } = require("../services/flitsService");
 const { lookupFlitsCredits } = require("../services/flitsLookupService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
@@ -310,7 +310,8 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
     challenge.verifiedAt = new Date();
     await challenge.save();
     await hydrateChallengeCustomerContext(store, campaign, challenge);
-    if (challenge.alreadyRedeemed) {
+    const customCreditLimitStore = isCustomCreditLimitStore(store);
+    if (challenge.alreadyRedeemed && !customCreditLimitStore) {
       return res.json({
         success: true,
         verified: true,
@@ -360,6 +361,8 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
         await enqueueCredit({ store, campaign, participant });
+      } else if (customCreditLimitStore) {
+        await enqueueCredit({ store, campaign, participant: existing });
       }
       await OtpChallenge.deleteOne({ _id: challenge._id });
     }
@@ -381,9 +384,20 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
     if (!challenge.eligibilityCustomerId && !challenge.shopifyCustomerId) {
       await hydrateChallengeCustomerContext(store, campaign, challenge);
     }
-    if (challenge.alreadyRedeemed) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    const customCreditLimitStore = isCustomCreditLimitStore(store);
+    if (challenge.alreadyRedeemed && !customCreditLimitStore) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
-    if (existing?.playedAt) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (existing?.playedAt) {
+      if (!customCreditLimitStore) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+      const creditJob = await enqueueCredit({ store, campaign, participant: existing });
+      await OtpChallenge.deleteOne({ _id: challenge._id });
+      return res.json({
+        success: true,
+        reward: existing.reward,
+        participantId: existing._id,
+        creditJobId: creditJob?._id
+      });
+    }
 
     const reward = pickReward(campaign);
     const participant = await Participant.create({
