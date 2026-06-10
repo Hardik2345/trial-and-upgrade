@@ -62,6 +62,19 @@ function creditUsageFilter({ store, participant }) {
   };
 }
 
+async function creditSuccessTags({ store, participant }, { JobModel = RewardCreditJob } = {}) {
+  const tags = ["credited"];
+  if (!isCustomCreditLimitStore(store)) return tags;
+
+  const sentCredits = await JobModel.countDocuments({
+    ...creditUsageFilter({ store, participant }),
+    status: "sent"
+  });
+  if (sentCredits <= 1) tags.push("credited-once");
+  else tags.push("credited-twice");
+  return tags;
+}
+
 async function customCreditLimitDecision(
   { store, participant },
   { JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid, logger = console } = {}
@@ -188,6 +201,7 @@ async function processCreditJob(
     axiosClient = axios,
     addTags = addCustomerTags,
     recordEvent = recordFunnelEvent,
+    JobModel = RewardCreditJob,
     logger = console
   } = {}
 ) {
@@ -269,6 +283,18 @@ async function processCreditJob(
     }
 
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
+    let creditTags = ["credited"];
+    try {
+      creditTags = await creditSuccessTags({ store, participant }, { JobModel });
+    } catch (countErr) {
+      logger.warn?.("[flits-queue] Credit sent but custom credited tag count failed", {
+        store: store?.slug,
+        campaignId: campaign?._id,
+        participantId: participant?._id,
+        jobId: job?._id,
+        error: countErr.message
+      });
+    }
     try {
       logger.info?.("[flits-queue] credit tagging shopify customer", {
         store: store?.slug,
@@ -276,9 +302,9 @@ async function processCreditJob(
         participantId: participant?._id,
         jobId: job?._id,
         customerGid: tagTargetGid || "",
-        tags: ["credited"]
+        tags: creditTags
       });
-      await addTags(store, tagTargetGid, ["credited"]);
+      await addTags(store, tagTargetGid, creditTags);
       logger.info?.("[flits-queue] credit tagged shopify customer", {
         store: store?.slug,
         campaignId: campaign?._id,
@@ -337,5 +363,6 @@ module.exports = {
   processCreditJob,
   parseEligibleQuantityTag,
   isCustomCreditLimitStore,
+  creditSuccessTags,
   customCreditLimitDecision
 };

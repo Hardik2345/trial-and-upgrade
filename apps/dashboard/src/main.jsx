@@ -534,7 +534,7 @@ function CampaignManager({ store, campaigns, loadCampaigns, showNotice, setError
             <CampaignRuleEditor
               key={campaign._id}
               campaign={campaign}
-              onSaved={() => loadCampaigns(store._id, campaign._id).then(() => showNotice("Campaign tags saved")).catch((err) => setError(err.message))}
+              onSaved={() => loadCampaigns(store._id, campaign._id).then(() => showNotice("Campaign rules saved")).catch((err) => setError(err.message))}
               onDeleted={() => apiFetch(`/api/admin/campaigns/${campaign._id}`, { method: "DELETE" }).then(() => loadCampaigns(store._id)).then(() => showNotice("Campaign deleted")).catch((err) => setError(err.message))}
             />
           ))}
@@ -599,23 +599,47 @@ function CampaignCreatePanel({ storeId, onCreated }) {
   );
 }
 
+function campaignWalletValue(campaign) {
+  return String(campaign.rewards?.[0]?.value ?? campaign.flitsCredit?.value ?? 399);
+}
+
+function campaignWalletComment(campaign, rewardValue) {
+  const existingComment = campaign.flitsCredit?.commentText || "";
+  if (!existingComment || /^Rewarding the user \d+ in wallet$/.test(existingComment)) {
+    return `Rewarding the user ${rewardValue} in wallet`;
+  }
+  return existingComment;
+}
+
 function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
   const [eligibilityTags, setEligibilityTags] = useState(formatTags(campaign.eligibilityTags));
+  const [walletValue, setWalletValue] = useState(campaignWalletValue(campaign));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     setEligibilityTags(formatTags(campaign.eligibilityTags));
+    setWalletValue(campaignWalletValue(campaign));
     setError("");
-  }, [campaign._id, campaign.eligibilityTags]);
+  }, [campaign._id, campaign.eligibilityTags, campaign.rewards, campaign.flitsCredit]);
 
   async function save() {
     setSaving(true);
     setError("");
+    const rewardValue = Number(walletValue || 0);
     try {
       await apiFetch(`/api/admin/campaigns/${campaign._id}`, {
         method: "PATCH",
-        body: JSON.stringify({ eligibilityTags: parseTags(eligibilityTags) })
+        body: JSON.stringify({
+          eligibilityTags: parseTags(eligibilityTags),
+          rewards: [{ key: `wallet_${rewardValue}`, label: `Wallet Credit ${rewardValue}`, value: rewardValue, weight: 1 }],
+          flitsCredit: {
+            ...(campaign.flitsCredit || {}),
+            enabled: campaign.flitsCredit?.enabled !== false,
+            value: rewardValue,
+            commentText: campaignWalletComment(campaign, rewardValue)
+          }
+        })
       });
       onSaved();
     } catch (err) {
@@ -634,12 +658,15 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
         </div>
         <button className="ghost-danger" onClick={onDeleted}>Delete</button>
       </div>
+      <Field label="Wallet Value">
+        <input value={walletValue} onChange={(event) => setWalletValue(event.target.value)} type="number" min="0" required />
+      </Field>
       <Field label="Eligibility Tags">
         <input value={eligibilityTags} onChange={(event) => setEligibilityTags(event.target.value)} placeholder="played, credited" />
       </Field>
       <div className="campaign-rule-actions">
-        <button className="mini-button" onClick={save} disabled={saving}>Save Tags</button>
-        <span>{parseTags(eligibilityTags).length} tags</span>
+        <button className="mini-button" onClick={save} disabled={saving}>Save Rules</button>
+        <span>Wallet {Number(walletValue || 0)} · {parseTags(eligibilityTags).length} tags</span>
       </div>
       {error ? <p className="error">{error}</p> : null}
     </article>

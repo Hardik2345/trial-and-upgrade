@@ -6,6 +6,7 @@ const {
   claimCreditJob,
   processCreditJob,
   parseEligibleQuantityTag,
+  creditSuccessTags,
   customCreditLimitDecision
 } = require("../src/services/flitsService");
 const { runFlitsQueueTick } = require("../src/services/flitsQueue");
@@ -231,6 +232,56 @@ test("enqueueCredit sends Flits payload without customer email", async () => {
   assert.equal(captured.payload.shopify_customer_id, "123");
 });
 
+test("creditSuccessTags adds credited-once for first custom brand credit", async () => {
+  const tags = await creditSuccessTags(
+    {
+      store: { _id: "store-1", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
+    },
+    {
+      JobModel: {
+        countDocuments: async () => 1
+      }
+    }
+  );
+
+  assert.deepEqual(tags, ["credited", "credited-once"]);
+});
+
+test("creditSuccessTags adds credited-twice for second custom brand credit", async () => {
+  const tags = await creditSuccessTags(
+    {
+      store: { _id: "store-1", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
+    },
+    {
+      JobModel: {
+        countDocuments: async () => 2
+      }
+    }
+  );
+
+  assert.deepEqual(tags, ["credited", "credited-twice"]);
+});
+
+test("creditSuccessTags does not add custom tags for other stores", async () => {
+  const tags = await creditSuccessTags(
+    {
+      store: { _id: "store-1", shopifyDomain: "other.myshopify.com" },
+      participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
+    },
+    {
+      JobModel: {
+        countDocuments: async () => {
+          throw new Error("should not count custom credits for other stores");
+        }
+      }
+    }
+  );
+
+  assert.deepEqual(tags, ["credited"]);
+});
+
 test("runFlitsQueueTick drains due jobs while respecting max concurrency", async () => {
   let claims = 0;
   let active = 0;
@@ -308,6 +359,37 @@ test("processCreditJob marks sent and tags primary Shopify customer with credite
   assert.equal(job.lockedBy, undefined);
   assert.deepEqual(calls.tags, [{ gid: "gid://shopify/Customer/1", tags: ["credited"] }]);
   assert.equal(calls.events, 1);
+});
+
+test("processCreditJob tags custom brand second credit with credited-twice", async () => {
+  const job = makeJob();
+  const calls = { tags: [] };
+
+  const result = await processCreditJob(
+    job,
+    {
+      store: {
+        _id: "store-1",
+        shopifyDomain: "skincarepersonaltouch.myshopify.com",
+        flitsConfig: { customActionUrl: "https://flits.example/credit", apiKey: "secret" }
+      },
+      campaign: {},
+      participant: {
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "123",
+        shopifyCustomerGid: "gid://shopify/Customer/1"
+      }
+    },
+    {
+      axiosClient: { post: async () => ({ status: 200 }) },
+      addTags: async (_store, gid, tags) => calls.tags.push({ gid, tags }),
+      recordEvent: async () => null,
+      JobModel: { countDocuments: async () => 2 }
+    }
+  );
+
+  assert.equal(result.status, "sent");
+  assert.deepEqual(calls.tags, [{ gid: "gid://shopify/Customer/1", tags: ["credited", "credited-twice"] }]);
 });
 
 test("processCreditJob falls back to eligibility customer when tagging credited", async () => {

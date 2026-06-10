@@ -8,7 +8,7 @@ const AdminUser = require("../models/AdminUser");
 const RefreshToken = require("../models/RefreshToken");
 const SmsDeliveryLog = require("../models/SmsDeliveryLog");
 const { requireAuth, requireSuperAdmin, canAccessStore } = require("../middleware/auth");
-const { funnelStages } = require("../services/campaignService");
+const { funnelStages, createOrReactivateCampaign } = require("../services/campaignService");
 const { toCSV } = require("../utils/csv");
 
 const router = express.Router();
@@ -243,8 +243,8 @@ router.post("/campaigns", requireSuperAdmin, async (req, res, next) => {
   try {
     const store = await TenantStore.findOne({ _id: req.body.tenantStoreId, deletedAt: null });
     if (!store) return res.status(404).json({ error: "Store not found" });
-    const campaign = await Campaign.create(req.body);
-    res.status(201).json({ campaign });
+    const { campaign, reactivated } = await createOrReactivateCampaign(req.body);
+    res.status(reactivated ? 200 : 201).json({ campaign, reactivated });
   } catch (err) {
     next(err);
   }
