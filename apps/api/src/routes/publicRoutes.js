@@ -56,6 +56,14 @@ function customerSourceFromShopifyResult(shopifyResult) {
   return "existing";
 }
 
+function postPlayTagsForParticipant(store, campaign, participant) {
+  const tags = [...(campaign.postPlayTags || [])];
+  if (isCustomCreditLimitStore(store) && participant.customerSource === "marketplace") {
+    tags.push("marketplace");
+  }
+  return [...new Set(tags)];
+}
+
 async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   const shopifyResult = await findOrCreateCustomer(store, {
     name: challenge.name,
@@ -367,7 +375,7 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
           playedAt: new Date()
         });
         const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
-        await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
+        await addCustomerTags(store, tagTargetGid, postPlayTagsForParticipant(store, campaign, participant));
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
         credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
       } else if (customCreditLimitStore) {
@@ -437,7 +445,7 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       playedAt: new Date()
     });
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
-    await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
+    await addCustomerTags(store, tagTargetGid, postPlayTagsForParticipant(store, campaign, participant));
     await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
     const credit = challenge.alreadyRedeemed
       ? creditResult({ reason: "already_redeemed" })
