@@ -97,7 +97,16 @@ async function customCreditLimitDecision(
   const customer = await fetchCustomerByGid(store, customerGid);
   const eligibleQuantity = parseEligibleQuantityTag(customer?.tags || []);
   if (!eligibleQuantity) {
-    return { applies: true, allowed: false, reason: "missing_eligible_quantity_tag", eligibleQuantity: null, usedCredits: 0 };
+    const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
+    const allowed = usedCredits < 1;
+    logger.info?.("[flits-queue] custom untagged customer credit checked", {
+      store: store?.slug,
+      participantId: participant?._id,
+      customerGid: customerGid || "",
+      usedCredits,
+      allowed
+    });
+    return { applies: true, allowed, reason: allowed ? "untagged_first_credit" : "untagged_limit_reached", eligibleQuantity: 1, usedCredits };
   }
 
   const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
@@ -115,8 +124,8 @@ async function customCreditLimitDecision(
 
 function creditSkipMessage(reason) {
   switch (reason) {
-    case "missing_eligible_quantity_tag":
-      return "You are not eligible for wallet credit.";
+    case "untagged_limit_reached":
+      return "You have already redeemed your wallet credit.";
     case "limit_reached":
       return "You have already redeemed the allowed number of wallet credits.";
     case "marketplace_limit_reached":
