@@ -422,6 +422,7 @@ test("enqueueCredit sends Flits payload without customer email", async () => {
   assert.equal(captured.payload.customer_email, undefined);
   assert.equal(captured.payload.customer_phone, "+919967833007");
   assert.equal(captured.payload.shopify_customer_id, "123");
+  assert.equal(captured.payload.credit_details.time_upto, 30);
 });
 
 test("creditSuccessTags adds credited-once for first custom brand credit", async () => {

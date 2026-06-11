@@ -197,7 +197,7 @@ async function enqueueCredit(
       credit_details: {
         credit_value: participant.reward?.value || campaign.flitsCredit.value,
         comment_text: campaign.flitsCredit.commentText,
-        time_upto: -1
+        time_upto: 30
       }
     }
   });
