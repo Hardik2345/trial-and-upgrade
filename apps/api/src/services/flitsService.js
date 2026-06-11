@@ -81,6 +81,18 @@ async function customCreditLimitDecision(
 ) {
   if (!isCustomCreditLimitStore(store)) return { applies: false, allowed: true };
 
+  if (participant.customerSource === "marketplace") {
+    const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
+    const allowed = usedCredits < 1;
+    logger.info?.("[flits-queue] custom marketplace customer credit checked", {
+      store: store?.slug,
+      participantId: participant?._id,
+      usedCredits,
+      allowed
+    });
+    return { applies: true, allowed, reason: allowed ? "marketplace_first_credit" : "marketplace_limit_reached", eligibleQuantity: 1, usedCredits };
+  }
+
   const customerGid = participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
   const customer = await fetchCustomerByGid(store, customerGid);
   const eligibleQuantity = parseEligibleQuantityTag(customer?.tags || []);
@@ -101,9 +113,47 @@ async function customCreditLimitDecision(
   return { applies: true, allowed, reason: allowed ? "under_limit" : "limit_reached", eligibleQuantity, usedCredits };
 }
 
+function creditSkipMessage(reason) {
+  switch (reason) {
+    case "missing_eligible_quantity_tag":
+      return "You are not eligible for wallet credit.";
+    case "limit_reached":
+      return "You have already redeemed the allowed number of wallet credits.";
+    case "marketplace_limit_reached":
+      return "You have already redeemed your marketplace customer wallet credit.";
+    case "flits_credit_disabled":
+      return "Wallet credit is currently disabled for this campaign.";
+    case "already_redeemed":
+      return "This mobile number has already played.";
+    default:
+      return "Wallet credit was not issued.";
+  }
+}
+
+function creditResult({ job = null, reason = null, eligibleQuantity = null, usedCredits = null } = {}) {
+  if (job) {
+    return {
+      credited: true,
+      queued: true,
+      creditJobId: job._id,
+      reason: "queued",
+      message: "Wallet credit is being processed."
+    };
+  }
+  return {
+    credited: false,
+    queued: false,
+    creditJobId: null,
+    reason,
+    message: creditSkipMessage(reason),
+    eligibleQuantity,
+    usedCredits
+  };
+}
+
 async function enqueueCredit(
   { store, campaign, participant },
-  { logger = console, JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid } = {}
+  { logger = console, JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid, includeResult = false } = {}
 ) {
   if (!campaign.flitsCredit?.enabled) {
     logger.info?.("[flits-queue] credit skipped (disabled)", {
@@ -111,7 +161,8 @@ async function enqueueCredit(
       campaignId: campaign?._id,
       participantId: participant?._id
     });
-    return null;
+    const result = creditResult({ reason: "flits_credit_disabled" });
+    return includeResult ? result : null;
   }
   const creditLimit = await customCreditLimitDecision(
     { store, participant },
@@ -126,7 +177,12 @@ async function enqueueCredit(
       eligibleQuantity: creditLimit.eligibleQuantity,
       usedCredits: creditLimit.usedCredits
     });
-    return null;
+    const result = creditResult({
+      reason: creditLimit.reason,
+      eligibleQuantity: creditLimit.eligibleQuantity,
+      usedCredits: creditLimit.usedCredits
+    });
+    return includeResult ? result : null;
   }
 
   const job = await JobModel.create({
@@ -158,7 +214,7 @@ async function enqueueCredit(
     jobId: job?._id,
     creditValue: job?.payload?.credit_details?.credit_value
   });
-  return job;
+  return includeResult ? creditResult({ job }) : job;
 }
 
 function dueCreditJobFilter({ now = new Date(), lockTtlMs = env.flitsQueueLockTtlMs } = {}) {
@@ -364,5 +420,6 @@ module.exports = {
   parseEligibleQuantityTag,
   isCustomCreditLimitStore,
   creditSuccessTags,
+  creditResult,
   customCreditLimitDecision
 };

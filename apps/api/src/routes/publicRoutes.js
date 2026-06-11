@@ -9,7 +9,7 @@ const env = require("../config/env");
 const { findCampaignBySlugs, pickReward } = require("../services/campaignService");
 const { buildOtp, sendOtpSms } = require("../services/otpService");
 const { findOrCreateCustomer, addCustomerTags, resolveUserLookupCustomer } = require("../services/shopifyService");
-const { enqueueCredit, isCustomCreditLimitStore } = require("../services/flitsService");
+const { enqueueCredit, isCustomCreditLimitStore, creditResult } = require("../services/flitsService");
 const { lookupFlitsCredits } = require("../services/flitsLookupService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
@@ -51,6 +51,11 @@ function customerName(customer) {
   return [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim();
 }
 
+function customerSourceFromShopifyResult(shopifyResult) {
+  if (shopifyResult.created) return "marketplace";
+  return "existing";
+}
+
 async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   const shopifyResult = await findOrCreateCustomer(store, {
     name: challenge.name,
@@ -59,6 +64,7 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   });
   const eligibilityCustomer = shopifyResult.eligibilityCustomer || shopifyResult.primaryCustomer;
   const primaryCustomer = shopifyResult.primaryCustomer;
+  const customerSource = customerSourceFromShopifyResult(shopifyResult);
   const tags = eligibilityCustomer?.tags || [];
   const alreadyRedeemed = campaign.eligibilityTags.some((tag) => tags.includes(tag));
 
@@ -67,10 +73,11 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   challenge.eligibilityCustomerId = eligibilityCustomer?.numericId || "";
   challenge.eligibilityCustomerGid = eligibilityCustomer?.id || "";
   challenge.phoneCollision = Boolean(shopifyResult.phoneCollision);
+  challenge.customerSource = customerSource;
   challenge.alreadyRedeemed = alreadyRedeemed;
   await challenge.save();
 
-  return { alreadyRedeemed };
+  return { alreadyRedeemed, customerSource };
 }
 
 async function findStoreBySlug(storeSlug) {
@@ -330,6 +337,7 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         phoneHash: challenge.phoneHash
       }
     });
+    let credit = null;
     if (store.game_enabled === false) {
       const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
       if (!existing?.playedAt) {
@@ -346,6 +354,7 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
           eligibilityCustomerId: challenge.eligibilityCustomerId,
           eligibilityCustomerGid: challenge.eligibilityCustomerGid,
           phoneCollision: challenge.phoneCollision,
+          customerSource: challenge.customerSource,
           reward: {
             key: `wallet_${campaign.flitsCredit?.value || 0}`,
             label: "Wallet Credit",
@@ -360,13 +369,13 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
         await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
-        await enqueueCredit({ store, campaign, participant });
+        credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
       } else if (customCreditLimitStore) {
-        await enqueueCredit({ store, campaign, participant: existing });
+        credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
       }
       await OtpChallenge.deleteOne({ _id: challenge._id });
     }
-    res.json({ success: true, verified: true });
+    res.json({ success: true, verified: true, ...(credit ? { credit, creditJobId: credit.creditJobId } : {}) });
   } catch (err) {
     next(err);
   }
@@ -389,13 +398,14 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
     if (existing?.playedAt) {
       if (!customCreditLimitStore) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
-      const creditJob = await enqueueCredit({ store, campaign, participant: existing });
+      const credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
       await OtpChallenge.deleteOne({ _id: challenge._id });
       return res.json({
         success: true,
         reward: existing.reward,
         participantId: existing._id,
-        creditJobId: creditJob?._id
+        creditJobId: credit.creditJobId,
+        credit
       });
     }
 
@@ -413,6 +423,7 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       eligibilityCustomerId: challenge.eligibilityCustomerId,
       eligibilityCustomerGid: challenge.eligibilityCustomerGid,
       phoneCollision: challenge.phoneCollision,
+      customerSource: challenge.customerSource,
       reward: {
         key: reward.key,
         label: reward.label,
@@ -428,13 +439,16 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
     await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
     await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
-    const creditJob = challenge.alreadyRedeemed ? null : await enqueueCredit({ store, campaign, participant });
+    const credit = challenge.alreadyRedeemed
+      ? creditResult({ reason: "already_redeemed" })
+      : await enqueueCredit({ store, campaign, participant }, { includeResult: true });
     await OtpChallenge.deleteOne({ _id: challenge._id });
     res.json({
       success: true,
       reward: participant.reward,
       participantId: participant._id,
-      creditJobId: creditJob?._id
+      creditJobId: credit.creditJobId,
+      credit
     });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });

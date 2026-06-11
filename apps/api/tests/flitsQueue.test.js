@@ -117,6 +117,49 @@ test("custom credit limit blocks skincare customer without eligible quantity tag
   assert.equal(decision.reason, "missing_eligible_quantity_tag");
 });
 
+test("custom credit limit allows marketplace skincare customer exactly once without eligible quantity tag", async () => {
+  let countCalls = 0;
+  const base = {
+    store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+    participant: {
+      phoneDisplay: "9967833007",
+      shopifyCustomerId: "1",
+      shopifyCustomerGid: "gid://shopify/Customer/1",
+      customerSource: "marketplace"
+    }
+  };
+  const firstDecision = await customCreditLimitDecision(base, {
+    JobModel: {
+      countDocuments: async () => {
+        countCalls += 1;
+        return 0;
+      }
+    },
+    fetchCustomerByGid: async () => {
+      throw new Error("should not require eligible quantity tag for marketplace customers");
+    },
+    logger: { info() {} }
+  });
+  const secondDecision = await customCreditLimitDecision(base, {
+    JobModel: {
+      countDocuments: async () => {
+        countCalls += 1;
+        return 1;
+      }
+    },
+    fetchCustomerByGid: async () => {
+      throw new Error("should not require eligible quantity tag for marketplace customers");
+    },
+    logger: { info() {} }
+  });
+
+  assert.equal(firstDecision.allowed, true);
+  assert.equal(firstDecision.reason, "marketplace_first_credit");
+  assert.equal(secondDecision.allowed, false);
+  assert.equal(secondDecision.reason, "marketplace_limit_reached");
+  assert.equal(countCalls, 2);
+});
+
 test("custom credit limit allows skincare customer while under quantity", async () => {
   let capturedFilter;
   const decision = await customCreditLimitDecision(
@@ -200,6 +243,155 @@ test("enqueueCredit skips creating job when custom credit limit blocks", async (
 
   assert.equal(job, null);
   assert.equal(createCalled, false);
+});
+
+test("enqueueCredit returns structured skip response for missing eligible quantity tag", async () => {
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        shopifyCustomerGid: "gid://shopify/Customer/1",
+        reward: { value: 399 }
+      }
+    },
+    {
+      includeResult: true,
+      fetchCustomerByGid: async () => ({ tags: [] }),
+      JobModel: {
+        countDocuments: async () => 0,
+        create: async () => {
+          throw new Error("should not create a credit job");
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.deepEqual(credit, {
+    credited: false,
+    queued: false,
+    creditJobId: null,
+    reason: "missing_eligible_quantity_tag",
+    message: "You are not eligible for wallet credit.",
+    eligibleQuantity: null,
+    usedCredits: 0
+  });
+});
+
+test("enqueueCredit returns structured skip response for exhausted custom limit", async () => {
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "123",
+        shopifyCustomerGid: "gid://shopify/Customer/1",
+        reward: { value: 399 }
+      }
+    },
+    {
+      includeResult: true,
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1"] }),
+      JobModel: {
+        countDocuments: async () => 1,
+        create: async () => {
+          throw new Error("should not create a credit job");
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(credit.credited, false);
+  assert.equal(credit.queued, false);
+  assert.equal(credit.creditJobId, null);
+  assert.equal(credit.reason, "limit_reached");
+  assert.equal(credit.message, "You have already redeemed the allowed number of wallet credits.");
+  assert.equal(credit.eligibleQuantity, 1);
+  assert.equal(credit.usedCredits, 1);
+});
+
+test("enqueueCredit returns structured skip response for exhausted marketplace customer", async () => {
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        eligibilityCustomerGid: "gid://shopify/Customer/1",
+        customerSource: "marketplace",
+        reward: { value: 399 }
+      }
+    },
+    {
+      includeResult: true,
+      fetchCustomerByGid: async () => {
+        throw new Error("should not fetch marketplace customer tags");
+      },
+      JobModel: {
+        countDocuments: async () => 1,
+        create: async () => {
+          throw new Error("should not create a credit job");
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(credit.credited, false);
+  assert.equal(credit.reason, "marketplace_limit_reached");
+  assert.equal(credit.message, "You have already redeemed your marketplace customer wallet credit.");
+});
+
+test("enqueueCredit returns structured queued response when credit job is created", async () => {
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "other", shopifyDomain: "other.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "123",
+        reward: { value: 399 }
+      }
+    },
+    {
+      includeResult: true,
+      JobModel: {
+        create: async (payload) => ({ _id: "job-1", ...payload })
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.deepEqual(credit, {
+    credited: true,
+    queued: true,
+    creditJobId: "job-1",
+    reason: "queued",
+    message: "Wallet credit is being processed."
+  });
+});
+
+test("enqueueCredit returns structured disabled response when campaign credit is off", async () => {
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "other", shopifyDomain: "other.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: false, value: 399, commentText: "Reward" } },
+      participant: { _id: "participant-1", phoneDisplay: "9967833007" }
+    },
+    { includeResult: true, logger: { info() {} } }
+  );
+
+  assert.equal(credit.credited, false);
+  assert.equal(credit.reason, "flits_credit_disabled");
+  assert.equal(credit.message, "Wallet credit is currently disabled for this campaign.");
 });
 
 test("enqueueCredit sends Flits payload without customer email", async () => {

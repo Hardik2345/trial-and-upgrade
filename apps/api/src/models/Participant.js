@@ -14,6 +14,7 @@ const ParticipantSchema = new mongoose.Schema(
     eligibilityCustomerId: String,
     eligibilityCustomerGid: String,
     phoneCollision: { type: Boolean, default: false },
+    customerSource: { type: String, enum: ["existing", "marketplace"], default: "existing" },
     reward: {
       key: String,
       label: String,
