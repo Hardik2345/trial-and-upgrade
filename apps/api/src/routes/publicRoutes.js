@@ -64,6 +64,20 @@ function postPlayTagsForParticipant(store, campaign, participant) {
   return [...new Set(tags)];
 }
 
+async function refreshParticipantCustomerContext(participant, challenge) {
+  participant.shopifyCustomerId = challenge.shopifyCustomerId;
+  participant.shopifyCustomerGid = challenge.shopifyCustomerGid;
+  participant.eligibilityCustomerId = challenge.eligibilityCustomerId;
+  participant.eligibilityCustomerGid = challenge.eligibilityCustomerGid;
+  participant.creditCustomerId = challenge.creditCustomerId;
+  participant.creditCustomerGid = challenge.creditCustomerGid;
+  participant.creditCustomerEmail = challenge.creditCustomerEmail;
+  participant.phoneCollision = challenge.phoneCollision;
+  participant.customerSource = challenge.customerSource;
+  await participant.save();
+  return participant;
+}
+
 async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   const shopifyResult = await findOrCreateCustomer(store, {
     name: challenge.name,
@@ -72,6 +86,7 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   });
   const eligibilityCustomer = shopifyResult.eligibilityCustomer || shopifyResult.primaryCustomer;
   const primaryCustomer = shopifyResult.primaryCustomer;
+  const creditCustomer = eligibilityCustomer || primaryCustomer;
   const customerSource = customerSourceFromShopifyResult(shopifyResult);
   const tags = eligibilityCustomer?.tags || [];
   const alreadyRedeemed = campaign.eligibilityTags.some((tag) => tags.includes(tag));
@@ -80,6 +95,9 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   challenge.shopifyCustomerGid = primaryCustomer?.id || "";
   challenge.eligibilityCustomerId = eligibilityCustomer?.numericId || "";
   challenge.eligibilityCustomerGid = eligibilityCustomer?.id || "";
+  challenge.creditCustomerId = creditCustomer?.numericId || "";
+  challenge.creditCustomerGid = creditCustomer?.id || "";
+  challenge.creditCustomerEmail = creditCustomer?.email || "";
   challenge.phoneCollision = Boolean(shopifyResult.phoneCollision);
   challenge.customerSource = customerSource;
   challenge.alreadyRedeemed = alreadyRedeemed;
@@ -364,6 +382,9 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
           shopifyCustomerGid: challenge.shopifyCustomerGid,
           eligibilityCustomerId: challenge.eligibilityCustomerId,
           eligibilityCustomerGid: challenge.eligibilityCustomerGid,
+          creditCustomerId: challenge.creditCustomerId,
+          creditCustomerGid: challenge.creditCustomerGid,
+          creditCustomerEmail: challenge.creditCustomerEmail,
           phoneCollision: challenge.phoneCollision,
           customerSource: challenge.customerSource,
           reward: {
@@ -382,7 +403,8 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
         credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
       } else if (customCreditLimitStore) {
-        credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
+        const refreshed = await refreshParticipantCustomerContext(existing, challenge);
+        credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
       } else {
         credit = creditResult({ reason: "already_played" });
       }
@@ -428,7 +450,8 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
           credit
         });
       }
-      const credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
+      const refreshed = await refreshParticipantCustomerContext(existing, challenge);
+      const credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
       await OtpChallenge.deleteOne({ _id: challenge._id });
       return res.json({
         success: true,
@@ -452,6 +475,9 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       shopifyCustomerGid: challenge.shopifyCustomerGid,
       eligibilityCustomerId: challenge.eligibilityCustomerId,
       eligibilityCustomerGid: challenge.eligibilityCustomerGid,
+      creditCustomerId: challenge.creditCustomerId,
+      creditCustomerGid: challenge.creditCustomerGid,
+      creditCustomerEmail: challenge.creditCustomerEmail,
       phoneCollision: challenge.phoneCollision,
       customerSource: challenge.customerSource,
       reward: {

@@ -255,7 +255,7 @@ router.patch("/campaigns/:campaignId", requireSuperAdmin, async (req, res, next)
   try {
     const campaign = await Campaign.findOne({ _id: req.params.campaignId, deletedAt: null });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    for (const field of ["name", "slug", "mechanicType", "playEventLabel", "otpLength", "otpTtlMinutes", "eligibilityTags", "postPlayTags", "flitsCredit", "enabled", "rewards"]) {
+    for (const field of ["name", "slug", "mechanicType", "playEventLabel", "otpLength", "otpTtlMinutes", "eligibilityTags", "postPlayTags", "flitsCredit", "customCredit", "enabled", "rewards"]) {
       if (req.body[field] !== undefined) campaign[field] = req.body[field];
     }
     await campaign.save();

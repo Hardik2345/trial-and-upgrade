@@ -28,6 +28,9 @@ const CampaignSchema = new mongoose.Schema(
       value: { type: Number, default: 399 },
       commentText: { type: String, default: "Rewarding the user in wallet" }
     },
+    customCredit: {
+      marketplaceAutoCreditEnabled: { type: Boolean, default: false }
+    },
     enabled: { type: Boolean, default: true },
     deletedAt: { type: Date, default: null, index: true }
   },

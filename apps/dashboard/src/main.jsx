@@ -578,7 +578,14 @@ function CampaignManager({ store, campaigns, loadCampaigns, showNotice, setError
 }
 
 function CampaignCreatePanel({ storeId, onCreated }) {
-  const [form, setForm] = useState({ name: "", slug: "", playEventLabel: "Spun Wheel", rewardValue: "399", eligibilityTags: "played" });
+  const [form, setForm] = useState({
+    name: "",
+    slug: "",
+    playEventLabel: "Spun Wheel",
+    rewardValue: "399",
+    eligibilityTags: "played",
+    marketplaceAutoCreditEnabled: false
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -603,10 +610,18 @@ function CampaignCreatePanel({ storeId, onCreated }) {
           rewards: [{ key: `wallet_${rewardValue}`, label: `Wallet Credit ${rewardValue}`, value: rewardValue, weight: 1 }],
           eligibilityTags: parseTags(form.eligibilityTags),
           postPlayTags: ["played"],
-          flitsCredit: { enabled: true, value: rewardValue, commentText: `Rewarding the user ${rewardValue} in wallet` }
+          flitsCredit: { enabled: true, value: rewardValue, commentText: `Rewarding the user ${rewardValue} in wallet` },
+          customCredit: { marketplaceAutoCreditEnabled: form.marketplaceAutoCreditEnabled }
         })
       });
-      setForm({ name: "", slug: "", playEventLabel: "Spun Wheel", rewardValue: "399", eligibilityTags: "played" });
+      setForm({
+        name: "",
+        slug: "",
+        playEventLabel: "Spun Wheel",
+        rewardValue: "399",
+        eligibilityTags: "played",
+        marketplaceAutoCreditEnabled: false
+      });
       onCreated(campaign);
     } catch (err) {
       setError(err.message);
@@ -624,6 +639,7 @@ function CampaignCreatePanel({ storeId, onCreated }) {
         <Field label="Play Label"><input value={form.playEventLabel} onChange={(event) => update("playEventLabel", event.target.value)} required /></Field>
         <Field label="Wallet Value"><input value={form.rewardValue} onChange={(event) => update("rewardValue", event.target.value)} type="number" min="0" required /></Field>
         <Field label="Eligibility Tags"><input value={form.eligibilityTags} onChange={(event) => update("eligibilityTags", event.target.value)} placeholder="played, credited" /></Field>
+        <label className="checkbox-field"><input type="checkbox" checked={form.marketplaceAutoCreditEnabled} onChange={(event) => update("marketplaceAutoCreditEnabled", event.target.checked)} /> Marketplace auto credit</label>
       </div>
       {error ? <p className="error">{error}</p> : null}
       <button className="mini-button" disabled={saving}><Plus size={16} /> Create Campaign</button>
@@ -646,14 +662,16 @@ function campaignWalletComment(campaign, rewardValue) {
 function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
   const [eligibilityTags, setEligibilityTags] = useState(formatTags(campaign.eligibilityTags));
   const [walletValue, setWalletValue] = useState(campaignWalletValue(campaign));
+  const [marketplaceAutoCreditEnabled, setMarketplaceAutoCreditEnabled] = useState(campaign.customCredit?.marketplaceAutoCreditEnabled === true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     setEligibilityTags(formatTags(campaign.eligibilityTags));
     setWalletValue(campaignWalletValue(campaign));
+    setMarketplaceAutoCreditEnabled(campaign.customCredit?.marketplaceAutoCreditEnabled === true);
     setError("");
-  }, [campaign._id, campaign.eligibilityTags, campaign.rewards, campaign.flitsCredit]);
+  }, [campaign._id, campaign.eligibilityTags, campaign.rewards, campaign.flitsCredit, campaign.customCredit]);
 
   async function save() {
     setSaving(true);
@@ -670,6 +688,10 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
             enabled: campaign.flitsCredit?.enabled !== false,
             value: rewardValue,
             commentText: campaignWalletComment(campaign, rewardValue)
+          },
+          customCredit: {
+            ...(campaign.customCredit || {}),
+            marketplaceAutoCreditEnabled
           }
         })
       });
@@ -696,9 +718,10 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
       <Field label="Eligibility Tags">
         <input value={eligibilityTags} onChange={(event) => setEligibilityTags(event.target.value)} placeholder="played, credited" />
       </Field>
+      <label className="checkbox-field"><input type="checkbox" checked={marketplaceAutoCreditEnabled} onChange={(event) => setMarketplaceAutoCreditEnabled(event.target.checked)} /> Marketplace auto credit</label>
       <div className="campaign-rule-actions">
         <button className="mini-button" onClick={save} disabled={saving}>Save Rules</button>
-        <span>Wallet {Number(walletValue || 0)} · {parseTags(eligibilityTags).length} tags</span>
+        <span>Wallet {Number(walletValue || 0)} · {parseTags(eligibilityTags).length} tags · Marketplace {marketplaceAutoCreditEnabled ? "on" : "off"}</span>
       </div>
       {error ? <p className="error">{error}</p> : null}
     </article>

@@ -22,9 +22,13 @@ function formatFlitsPhone(phone) {
   return phone;
 }
 
+function normalizeEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
 function summarizeCreditPayload(payload) {
   return {
-    customer_phone: payload?.customer_phone || "",
+    customer_email: payload?.customer_email || "",
     shopify_customer_id: payload?.shopify_customer_id || "",
     credit_value: payload?.credit_details?.credit_value,
     comment_text: payload?.credit_details?.comment_text || "",
@@ -49,10 +53,14 @@ function isCustomCreditLimitStore(store) {
 }
 
 function creditUsageFilter({ store, participant }) {
-  const customerId = participant.shopifyCustomerId || participant.eligibilityCustomerId || "";
+  const customerId = participant.creditCustomerId || participant.shopifyCustomerId || participant.eligibilityCustomerId || "";
+  const customerEmail = normalizeEmail(participant.creditCustomerEmail);
   const customerPhone = formatFlitsPhone(participant.phoneDisplay);
   const identifiers = [];
   if (customerId) identifiers.push({ "payload.shopify_customer_id": customerId });
+  if (customerEmail) identifiers.push({ "payload.customer_email": customerEmail });
+  // Backward compatibility: old jobs were keyed by phone. Keep counting them
+  // so existing customers do not get extra credits after switching to email.
   if (customerPhone) identifiers.push({ "payload.customer_phone": customerPhone });
 
   return {
@@ -76,12 +84,17 @@ async function creditSuccessTags({ store, participant }, { JobModel = RewardCred
 }
 
 async function customCreditLimitDecision(
-  { store, participant },
-  { JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid, logger = console } = {}
+  { store, campaign, participant },
+  {
+    JobModel = RewardCreditJob,
+    fetchCustomerByGid = getCustomerByGid,
+    logger = console
+  } = {}
 ) {
   if (!isCustomCreditLimitStore(store)) return { applies: false, allowed: true };
 
-  if (participant.customerSource === "marketplace") {
+  const marketplaceAutoCreditEnabled = campaign?.customCredit?.marketplaceAutoCreditEnabled === true;
+  if (marketplaceAutoCreditEnabled && participant.customerSource === "marketplace") {
     const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
     const allowed = usedCredits < 1;
     logger.info?.("[flits-queue] custom marketplace customer credit checked", {
@@ -123,6 +136,8 @@ function creditSkipMessage(reason) {
       return "You have already redeemed your marketplace customer wallet credit.";
     case "flits_credit_disabled":
       return "Wallet credit is currently disabled for this campaign.";
+    case "missing_credit_email":
+      return "Wallet credit could not be issued because no email is linked to the customer.";
     case "already_redeemed":
       return "This mobile number has already played.";
     case "already_played":
@@ -153,9 +168,30 @@ function creditResult({ job = null, reason = null, eligibleQuantity = null, used
   };
 }
 
+async function resolveCreditCustomer({ store, participant }, { fetchCustomerByGid = getCustomerByGid } = {}) {
+  const existingEmail = normalizeEmail(participant.creditCustomerEmail);
+  const existingId = participant.creditCustomerId || participant.shopifyCustomerId || participant.eligibilityCustomerId || "";
+  const existingGid = participant.creditCustomerGid || participant.eligibilityCustomerGid || participant.shopifyCustomerGid || "";
+  if (existingEmail) {
+    return { id: existingId, gid: existingGid, email: existingEmail };
+  }
+
+  const customer = await fetchCustomerByGid(store, existingGid);
+  return {
+    id: customer?.numericId || existingId,
+    gid: customer?.id || existingGid,
+    email: normalizeEmail(customer?.email)
+  };
+}
+
 async function enqueueCredit(
   { store, campaign, participant },
-  { logger = console, JobModel = RewardCreditJob, fetchCustomerByGid = getCustomerByGid, includeResult = false } = {}
+  {
+    logger = console,
+    JobModel = RewardCreditJob,
+    fetchCustomerByGid = getCustomerByGid,
+    includeResult = false
+  } = {}
 ) {
   if (!campaign.flitsCredit?.enabled) {
     logger.info?.("[flits-queue] credit skipped (disabled)", {
@@ -167,7 +203,7 @@ async function enqueueCredit(
     return includeResult ? result : null;
   }
   const creditLimit = await customCreditLimitDecision(
-    { store, participant },
+    { store, campaign, participant },
     { JobModel, fetchCustomerByGid, logger }
   );
   if (creditLimit.applies && !creditLimit.allowed) {
@@ -187,6 +223,18 @@ async function enqueueCredit(
     return includeResult ? result : null;
   }
 
+  const creditCustomer = await resolveCreditCustomer({ store, participant }, { fetchCustomerByGid });
+  if (!creditCustomer.email) {
+    logger.info?.("[flits-queue] credit skipped (missing resolved customer email)", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      customerGid: creditCustomer.gid || ""
+    });
+    const result = creditResult({ reason: "missing_credit_email" });
+    return includeResult ? result : null;
+  }
+
   const job = await JobModel.create({
     tenantStoreId: store._id,
     campaignId: campaign._id,
@@ -194,8 +242,8 @@ async function enqueueCredit(
     status: "pending",
     nextRunAt: new Date(),
     payload: {
-      customer_phone: formatFlitsPhone(participant.phoneDisplay),
-      shopify_customer_id: participant.shopifyCustomerId || participant.eligibilityCustomerId || "",
+      customer_email: creditCustomer.email,
+      shopify_customer_id: creditCustomer.id || "",
       credit_details: {
         credit_value: participant.reward?.value || campaign.flitsCredit.value,
         comment_text: campaign.flitsCredit.commentText,
@@ -282,7 +330,7 @@ async function processCreditJob(
       creditValue: job?.payload?.credit_details?.credit_value,
       attempt: job?.attempts,
       identifiers: {
-        customer_phone: job?.payload?.customer_phone || "",
+        customer_email: job?.payload?.customer_email || "",
         shopify_customer_id: job?.payload?.shopify_customer_id || ""
       }
     });
@@ -312,7 +360,7 @@ async function processCreditJob(
       sentAt: job?.sentAt
     });
 
-    const flitsCustomerId = participant.shopifyCustomerId || participant.eligibilityCustomerId;
+    const flitsCustomerId = participant.creditCustomerId || participant.shopifyCustomerId || participant.eligibilityCustomerId;
     if (flitsCustomerId) {
       try {
         const { totalPoints, redeemedPoints, customer } = await lookupFlitsCredits(store, {
@@ -340,7 +388,7 @@ async function processCreditJob(
       }
     }
 
-    const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
+    const tagTargetGid = participant.creditCustomerGid || participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
     let creditTags = ["credited"];
     try {
       creditTags = await creditSuccessTags({ store, participant }, { JobModel });

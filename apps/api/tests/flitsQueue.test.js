@@ -118,10 +118,37 @@ test("custom credit limit blocks skincare customer without eligible quantity tag
   assert.equal(decision.reason, "missing_eligible_quantity_tag");
 });
 
-test("custom credit limit allows marketplace skincare customer exactly once without eligible quantity tag", async () => {
+test("custom credit limit requires marketplace skincare customer tag when marketplace auto-credit is disabled", async () => {
+  let fetched = false;
+  const decision = await customCreditLimitDecision(
+    {
+      store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+      participant: {
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "1",
+        shopifyCustomerGid: "gid://shopify/Customer/1",
+        customerSource: "marketplace"
+      }
+    },
+    {
+      fetchCustomerByGid: async () => {
+        fetched = true;
+        return { tags: ["played"] };
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(fetched, true);
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "missing_eligible_quantity_tag");
+});
+
+test("custom credit limit allows marketplace skincare customer exactly once when campaign toggle is enabled", async () => {
   let countCalls = 0;
   const base = {
     store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
+    campaign: { customCredit: { marketplaceAutoCreditEnabled: true } },
     participant: {
       phoneDisplay: "9967833007",
       shopifyCustomerId: "1",
@@ -169,6 +196,7 @@ test("custom credit limit allows skincare customer while under quantity", async 
       participant: {
         phoneDisplay: "9967833007",
         shopifyCustomerId: "1",
+        creditCustomerEmail: "customer@example.com",
         shopifyCustomerGid: "gid://shopify/Customer/1"
       }
     },
@@ -190,6 +218,7 @@ test("custom credit limit allows skincare customer while under quantity", async 
   assert.deepEqual(capturedFilter.status.$in, ["pending", "processing", "failed", "sent"]);
   assert.deepEqual(capturedFilter.$or, [
     { "payload.shopify_customer_id": "1" },
+    { "payload.customer_email": "customer@example.com" },
     { "payload.customer_phone": "+919967833007" }
   ]);
 });
@@ -222,7 +251,11 @@ test("enqueueCredit skips creating job when custom credit limit blocks", async (
   const job = await enqueueCredit(
     {
       store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
-      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      campaign: {
+        _id: "campaign-1",
+        flitsCredit: { enabled: true, value: 399, commentText: "Reward" },
+        customCredit: { marketplaceAutoCreditEnabled: true }
+      },
       participant: {
         _id: "participant-1",
         phoneDisplay: "9967833007",
@@ -250,7 +283,11 @@ test("enqueueCredit returns structured skip response for missing eligible quanti
   const credit = await enqueueCredit(
     {
       store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
-      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      campaign: {
+        _id: "campaign-1",
+        flitsCredit: { enabled: true, value: 399, commentText: "Reward" },
+        customCredit: { marketplaceAutoCreditEnabled: true }
+      },
       participant: {
         _id: "participant-1",
         phoneDisplay: "9967833007",
@@ -321,7 +358,11 @@ test("enqueueCredit returns structured skip response for exhausted marketplace c
   const credit = await enqueueCredit(
     {
       store: { _id: "store-1", slug: "skincarepersonaltouch", shopifyDomain: "skincarepersonaltouch.myshopify.com" },
-      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      campaign: {
+        _id: "campaign-1",
+        flitsCredit: { enabled: true, value: 399, commentText: "Reward" },
+        customCredit: { marketplaceAutoCreditEnabled: true }
+      },
       participant: {
         _id: "participant-1",
         phoneDisplay: "9967833007",
@@ -359,6 +400,7 @@ test("enqueueCredit returns structured queued response when credit job is create
         _id: "participant-1",
         phoneDisplay: "9967833007",
         shopifyCustomerId: "123",
+        creditCustomerEmail: "customer@example.com",
         reward: { value: 399 }
       }
     },
@@ -419,7 +461,7 @@ test("creditResult returns structured already played response", () => {
   });
 });
 
-test("enqueueCredit sends Flits payload without customer email", async () => {
+test("enqueueCredit sends Flits payload with resolved customer email and no phone", async () => {
   let captured;
   await enqueueCredit(
     {
@@ -430,6 +472,7 @@ test("enqueueCredit sends Flits payload without customer email", async () => {
         email: "hardikparikh19@gmail.com",
         phoneDisplay: "9967833007",
         shopifyCustomerId: "123",
+        creditCustomerEmail: "resolved@example.com",
         reward: { value: 399 }
       }
     },
@@ -444,10 +487,41 @@ test("enqueueCredit sends Flits payload without customer email", async () => {
     }
   );
 
-  assert.equal(captured.payload.customer_email, undefined);
-  assert.equal(captured.payload.customer_phone, "+919967833007");
+  assert.equal(captured.payload.customer_email, "resolved@example.com");
+  assert.equal(captured.payload.customer_phone, undefined);
   assert.equal(captured.payload.shopify_customer_id, "123");
   assert.equal(captured.payload.credit_details.time_upto, 30);
+});
+
+test("enqueueCredit skips when resolved credit email is missing", async () => {
+  let createCalled = false;
+  const credit = await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "other", shopifyDomain: "other.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9967833007",
+        shopifyCustomerId: "123",
+        reward: { value: 399 }
+      }
+    },
+    {
+      includeResult: true,
+      fetchCustomerByGid: async () => null,
+      JobModel: {
+        create: async () => {
+          createCalled = true;
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.equal(createCalled, false);
+  assert.equal(credit.credited, false);
+  assert.equal(credit.reason, "missing_credit_email");
+  assert.equal(credit.message, "Wallet credit could not be issued because no email is linked to the customer.");
 });
 
 test("creditSuccessTags adds credited-once for first custom brand credit", async () => {
