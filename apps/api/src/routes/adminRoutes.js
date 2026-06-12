@@ -10,6 +10,7 @@ const SmsDeliveryLog = require("../models/SmsDeliveryLog");
 const { requireAuth, requireSuperAdmin, canAccessStore } = require("../middleware/auth");
 const { funnelStages, createOrReactivateCampaign } = require("../services/campaignService");
 const { toCSV } = require("../utils/csv");
+const { parsePagination, paginationMeta } = require("../utils/pagination");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -359,8 +360,7 @@ router.get("/funnel-stats", async (req, res, next) => {
     const { start, end } = parseDateRange(req.query);
     const eventType = req.query.eventType;
     if (!eventType || eventType === "funnel") return res.status(400).json({ error: "eventType is required" });
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const pagination = parsePagination(req.query, { defaultLimit: 25, maxLimit: 200 });
     const filter = {
       tenantStoreId: req.query.storeId,
       campaignId: campaign._id,
@@ -371,15 +371,16 @@ router.get("/funnel-stats", async (req, res, next) => {
 
     const [total, events] = await Promise.all([
       FunnelEvent.countDocuments(filter),
-      FunnelEvent.find(filter).sort({ occurredAt: -1 }).skip((page - 1) * limit).limit(limit)
+      FunnelEvent.find(filter).sort({ occurredAt: -1 }).skip(pagination.skip).limit(pagination.limit)
     ]);
     res.json({
       total,
-      page,
-      limit,
+      page: pagination.page,
+      limit: pagination.limit,
+      pagination: paginationMeta({ total, page: pagination.page, limit: pagination.limit }),
       label: eventType === "played" ? campaign.playEventLabel : eventType,
       rows: events.map((event, index) => ({
-        index: (page - 1) * limit + index + 1,
+        index: pagination.skip + index + 1,
         name: event.name,
         mobile: event.mobile,
         timestamp: event.occurredAt

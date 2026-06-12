@@ -327,11 +327,14 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
     await hydrateChallengeCustomerContext(store, campaign, challenge);
     const customCreditLimitStore = isCustomCreditLimitStore(store);
     if (challenge.alreadyRedeemed && !customCreditLimitStore) {
+      const credit = creditResult({ reason: "already_redeemed" });
       return res.json({
         success: true,
         verified: true,
         alreadyPlayed: true,
-        message: "This mobile number has already played"
+        message: "This mobile number has already played",
+        creditJobId: credit.creditJobId,
+        credit
       });
     }
     await recordFunnelEvent({
@@ -380,10 +383,12 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
       } else if (customCreditLimitStore) {
         credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
+      } else {
+        credit = creditResult({ reason: "already_played" });
       }
       await OtpChallenge.deleteOne({ _id: challenge._id });
     }
-    res.json({ success: true, verified: true, ...(credit ? { credit, creditJobId: credit.creditJobId } : {}) });
+    res.json({ success: true, verified: true, ...(credit ? { alreadyPlayed: !credit.credited && credit.reason === "already_played", credit, creditJobId: credit.creditJobId } : {}) });
   } catch (err) {
     next(err);
   }
@@ -402,10 +407,27 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       await hydrateChallengeCustomerContext(store, campaign, challenge);
     }
     const customCreditLimitStore = isCustomCreditLimitStore(store);
-    if (challenge.alreadyRedeemed && !customCreditLimitStore) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (challenge.alreadyRedeemed && !customCreditLimitStore) {
+      const credit = creditResult({ reason: "already_redeemed" });
+      return res.status(409).json({
+        error: "This mobile number has already played",
+        alreadyPlayed: true,
+        creditJobId: credit.creditJobId,
+        credit
+      });
+    }
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
     if (existing?.playedAt) {
-      if (!customCreditLimitStore) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+      if (!customCreditLimitStore) {
+        const credit = creditResult({ reason: "already_played" });
+        return res.status(409).json({
+          error: "This mobile number has already played",
+          alreadyPlayed: true,
+          participantId: existing._id,
+          creditJobId: credit.creditJobId,
+          credit
+        });
+      }
       const credit = await enqueueCredit({ store, campaign, participant: existing }, { includeResult: true });
       await OtpChallenge.deleteOne({ _id: challenge._id });
       return res.json({
@@ -459,7 +481,15 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       credit
     });
   } catch (err) {
-    if (err.code === 11000) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (err.code === 11000) {
+      const credit = creditResult({ reason: "already_played" });
+      return res.status(409).json({
+        error: "This mobile number has already played",
+        alreadyPlayed: true,
+        creditJobId: credit.creditJobId,
+        credit
+      });
+    }
     next(err);
   }
 });

@@ -125,6 +125,8 @@ function creditSkipMessage(reason) {
       return "Wallet credit is currently disabled for this campaign.";
     case "already_redeemed":
       return "This mobile number has already played.";
+    case "already_played":
+      return "This mobile number has already played.";
     default:
       return "Wallet credit was not issued.";
   }

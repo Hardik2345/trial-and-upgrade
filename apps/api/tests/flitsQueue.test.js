@@ -7,6 +7,7 @@ const {
   processCreditJob,
   parseEligibleQuantityTag,
   creditSuccessTags,
+  creditResult,
   customCreditLimitDecision
 } = require("../src/services/flitsService");
 const { runFlitsQueueTick } = require("../src/services/flitsQueue");
@@ -392,6 +393,30 @@ test("enqueueCredit returns structured disabled response when campaign credit is
   assert.equal(credit.credited, false);
   assert.equal(credit.reason, "flits_credit_disabled");
   assert.equal(credit.message, "Wallet credit is currently disabled for this campaign.");
+});
+
+test("creditResult returns structured already redeemed response", () => {
+  assert.deepEqual(creditResult({ reason: "already_redeemed" }), {
+    credited: false,
+    queued: false,
+    creditJobId: null,
+    reason: "already_redeemed",
+    message: "This mobile number has already played.",
+    eligibleQuantity: null,
+    usedCredits: null
+  });
+});
+
+test("creditResult returns structured already played response", () => {
+  assert.deepEqual(creditResult({ reason: "already_played" }), {
+    credited: false,
+    queued: false,
+    creditJobId: null,
+    reason: "already_played",
+    message: "This mobile number has already played.",
+    eligibleQuantity: null,
+    usedCredits: null
+  });
 });
 
 test("enqueueCredit sends Flits payload without customer email", async () => {

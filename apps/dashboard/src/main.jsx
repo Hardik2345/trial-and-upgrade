@@ -146,6 +146,12 @@ function Dashboard({ user, onLogout }) {
     loadUsers().catch((err) => setError(err.message));
   }, [storeId]);
 
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = window.setTimeout(() => setNotice(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   async function handleLogout() {
     await logout();
     onLogout();
@@ -188,7 +194,7 @@ function Dashboard({ user, onLogout }) {
           </div>
         </header>
 
-        {notice ? <div className="notice">{notice}</div> : null}
+        {notice ? <div className="notice toast" role="status">{notice}</div> : null}
         {error ? <div className="error-banner">{error}</div> : null}
 
         {view === "stores" && user.role === "super_admin" ? (
@@ -228,6 +234,9 @@ function AnalyticsView({ user, stores, campaigns, storeId, campaignId, setStoreI
   const [activeTab, setActiveTab] = useState("funnel");
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
+  const [pagination, setPagination] = useState(null);
   const [dashboardStats, setDashboardStats] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -245,6 +254,7 @@ function AnalyticsView({ user, stores, campaigns, storeId, campaignId, setStoreI
       setDashboardStats(null);
       setRows([]);
       setTotal(0);
+      setPagination(null);
       return;
     }
     setLoading(true);
@@ -254,9 +264,18 @@ function AnalyticsView({ user, stores, campaigns, storeId, campaignId, setStoreI
       if (activeTab !== "funnel") {
         const tabQuery = new URLSearchParams(query);
         tabQuery.set("eventType", activeTab);
+        tabQuery.set("page", String(page));
+        tabQuery.set("limit", String(limit));
         const data = await apiFetch(`/api/admin/funnel-stats?${tabQuery.toString()}`);
+        const nextPagination = data.pagination || { total: data.total || 0, page: data.page || page, limit: data.limit || limit, totalPages: Math.max(1, Math.ceil((data.total || 0) / (data.limit || limit))) };
         setRows(data.rows || []);
         setTotal(data.total || 0);
+        setPagination(nextPagination);
+        if (page > nextPagination.totalPages) setPage(nextPagination.totalPages);
+      } else {
+        setRows([]);
+        setTotal(0);
+        setPagination(null);
       }
     } catch (err) {
       setError(err.message);
@@ -267,7 +286,11 @@ function AnalyticsView({ user, stores, campaigns, storeId, campaignId, setStoreI
 
   useEffect(() => {
     refresh();
-  }, [query, activeTab]);
+  }, [query, activeTab, page, limit]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, activeTab, limit]);
 
   useEffect(() => {
     if (!storeId || !campaignId || !getAccessToken()) return;
@@ -337,7 +360,16 @@ function AnalyticsView({ user, stores, campaigns, storeId, campaignId, setStoreI
       ) : activeTab === "funnel" ? (
         <FunnelView stats={dashboardStats} playLabel={playTab} />
       ) : (
-        <TableView total={total} rows={rows} tab={tabs.find((tab) => tab.key === activeTab)} />
+        <TableView
+          total={total}
+          rows={rows}
+          tab={tabs.find((tab) => tab.key === activeTab)}
+          pagination={pagination}
+          limit={limit}
+          setLimit={setLimit}
+          setPage={setPage}
+          loading={loading}
+        />
       )}
     </>
   );
@@ -772,11 +804,30 @@ function Metric({ label, value, tone }) {
   return <article className={`metric metric-${tone}`}><span>{label}</span><strong>{value}</strong></article>;
 }
 
-function TableView({ total, rows, tab }) {
+function TableView({ total, rows, tab, pagination, limit, setLimit, setPage, loading }) {
+  const page = pagination?.page || 1;
+  const totalPages = pagination?.totalPages || 1;
+  const start = total ? ((page - 1) * limit) + 1 : 0;
+  const end = total ? Math.min(total, start + rows.length - 1) : 0;
+
   return (
     <section className="data-panel">
       <div className="panel-title"><h2>{tab?.totalLabel}: {total}</h2></div>
       <DataList headers={["#", "Name", "Mobile", "Timestamp"]} rows={rows.map((row) => [row.index, row.name, row.mobile, formatDateTime(row.timestamp)])} />
+      <div className="pagination-bar">
+        <span>{total ? `${start}-${end} of ${total}` : "0 records"}</span>
+        <label>
+          Rows
+          <select value={limit} onChange={(event) => setLimit(Number(event.target.value))} disabled={loading}>
+            {[10, 25, 50, 100].map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </label>
+        <div className="pagination-actions">
+          <button onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={loading || page <= 1}>Previous</button>
+          <strong>Page {page} of {totalPages}</strong>
+          <button onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={loading || page >= totalPages}>Next</button>
+        </div>
+      </div>
     </section>
   );
 }
