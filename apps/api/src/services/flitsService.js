@@ -7,6 +7,8 @@ const env = require("../config/env");
 
 const CUSTOM_CREDIT_LIMIT_STORE_DOMAINS = new Set(["skincarepersonaltouch.myshopify.com"]);
 const ELIGIBLE_QUANTITY_TAG_PREFIX = "eligible-qty-";
+const CREDITED_ONCE_TAG = "credited-once";
+const CREDITED_TWICE_TAG = "credited-twice";
 const MAX_CUSTOM_CREDIT_LIMIT = 2;
 
 function clearLock(job) {
@@ -48,6 +50,13 @@ function parseEligibleQuantityTag(tags) {
   return null;
 }
 
+function creditedTagUsage(tags) {
+  const normalizedTags = (tags || []).map((tag) => String(tag || "").trim().toLowerCase());
+  if (normalizedTags.includes(CREDITED_TWICE_TAG)) return 2;
+  if (normalizedTags.includes(CREDITED_ONCE_TAG)) return 1;
+  return 0;
+}
+
 function isCustomCreditLimitStore(store) {
   return CUSTOM_CREDIT_LIMIT_STORE_DOMAINS.has(String(store?.shopifyDomain || "").trim().toLowerCase());
 }
@@ -59,8 +68,8 @@ function creditUsageFilter({ store, participant }) {
   const identifiers = [];
   if (customerId) identifiers.push({ "payload.shopify_customer_id": customerId });
   if (customerEmail) identifiers.push({ "payload.customer_email": customerEmail });
-  // Backward compatibility: old jobs were keyed by phone. Keep counting them
-  // so existing customers do not get extra credits after switching to email.
+  // Backward compatibility: old jobs were keyed by phone. Keep matching them
+  // for queue-state checks after switching new Flits jobs to email.
   if (customerPhone) identifiers.push({ "payload.customer_phone": customerPhone });
 
   return {
@@ -70,16 +79,22 @@ function creditUsageFilter({ store, participant }) {
   };
 }
 
-async function creditSuccessTags({ store, participant }, { JobModel = RewardCreditJob } = {}) {
+async function inflightCreditCount({ store, participant }, { JobModel = RewardCreditJob } = {}) {
+  return JobModel.countDocuments({
+    ...creditUsageFilter({ store, participant }),
+    status: { $in: ["pending", "processing", "failed"] }
+  });
+}
+
+async function creditSuccessTags({ store, participant }, { fetchCustomerByGid = getCustomerByGid } = {}) {
   const tags = ["credited"];
   if (!isCustomCreditLimitStore(store)) return tags;
 
-  const sentCredits = await JobModel.countDocuments({
-    ...creditUsageFilter({ store, participant }),
-    status: "sent"
-  });
-  if (sentCredits <= 1) tags.push("credited-once");
-  else tags.push("credited-twice");
+  const customerGid = participant.creditCustomerGid || participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
+  const customer = await fetchCustomerByGid(store, customerGid);
+  const usedCredits = creditedTagUsage(customer?.tags || []);
+  if (usedCredits <= 0) tags.push(CREDITED_ONCE_TAG);
+  else tags.push(CREDITED_TWICE_TAG);
   return tags;
 }
 
@@ -108,19 +123,22 @@ async function customCreditLimitDecision(
 
   const customerGid = participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
   const customer = await fetchCustomerByGid(store, customerGid);
-  const eligibleQuantity = parseEligibleQuantityTag(customer?.tags || []);
+  const customerTags = customer?.tags || [];
+  const eligibleQuantity = parseEligibleQuantityTag(customerTags);
   if (!eligibleQuantity) {
     return { applies: true, allowed: false, reason: "missing_eligible_quantity_tag", eligibleQuantity: null, usedCredits: 0 };
   }
 
-  const usedCredits = await JobModel.countDocuments(creditUsageFilter({ store, participant }));
-  const allowed = usedCredits < eligibleQuantity;
+  const usedCredits = creditedTagUsage(customerTags);
+  const activeCredits = await inflightCreditCount({ store, participant }, { JobModel });
+  const allowed = usedCredits < eligibleQuantity && activeCredits === 0;
   logger.info?.("[flits-queue] custom credit limit checked", {
     store: store?.slug,
     participantId: participant?._id,
     customerGid: customerGid || "",
     eligibleQuantity,
     usedCredits,
+    activeCredits,
     allowed
   });
   return { applies: true, allowed, reason: allowed ? "under_limit" : "limit_reached", eligibleQuantity, usedCredits };
@@ -306,6 +324,7 @@ async function processCreditJob(
     maxAttempts = env.flitsQueueMaxAttempts,
     axiosClient = axios,
     addTags = addCustomerTags,
+    fetchCustomerByGid = getCustomerByGid,
     recordEvent = recordFunnelEvent,
     JobModel = RewardCreditJob,
     logger = console
@@ -391,7 +410,7 @@ async function processCreditJob(
     const tagTargetGid = participant.creditCustomerGid || participant.eligibilityCustomerGid || participant.shopifyCustomerGid;
     let creditTags = ["credited"];
     try {
-      creditTags = await creditSuccessTags({ store, participant }, { JobModel });
+      creditTags = await creditSuccessTags({ store, participant }, { fetchCustomerByGid });
     } catch (countErr) {
       logger.warn?.("[flits-queue] Credit sent but custom credited tag count failed", {
         store: store?.slug,

@@ -201,11 +201,11 @@ test("custom credit limit allows skincare customer while under quantity", async 
       }
     },
     {
-      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2"] }),
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2", "credited-once"] }),
       JobModel: {
         async countDocuments(filter) {
           capturedFilter = filter;
-          return 1;
+          return 0;
         }
       },
       logger: { info() {} }
@@ -215,7 +215,7 @@ test("custom credit limit allows skincare customer while under quantity", async 
   assert.equal(decision.allowed, true);
   assert.equal(decision.eligibleQuantity, 2);
   assert.equal(decision.usedCredits, 1);
-  assert.deepEqual(capturedFilter.status.$in, ["pending", "processing", "failed", "sent"]);
+  assert.deepEqual(capturedFilter.status.$in, ["pending", "processing", "failed"]);
   assert.deepEqual(capturedFilter.$or, [
     { "payload.shopify_customer_id": "1" },
     { "payload.customer_email": "customer@example.com" },
@@ -234,8 +234,8 @@ test("custom credit limit blocks skincare customer at quantity", async () => {
       }
     },
     {
-      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1"] }),
-      JobModel: { countDocuments: async () => 1 },
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1", "credited-once"] }),
+      JobModel: { countDocuments: async () => 0 },
       logger: { info() {} }
     }
   );
@@ -334,9 +334,9 @@ test("enqueueCredit returns structured skip response for exhausted custom limit"
     },
     {
       includeResult: true,
-      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1"] }),
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-1", "credited-once"] }),
       JobModel: {
-        countDocuments: async () => 1,
+        countDocuments: async () => 0,
         create: async () => {
           throw new Error("should not create a credit job");
         }
@@ -531,9 +531,7 @@ test("creditSuccessTags adds credited-once for first custom brand credit", async
       participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
     },
     {
-      JobModel: {
-        countDocuments: async () => 1
-      }
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2"] })
     }
   );
 
@@ -547,9 +545,7 @@ test("creditSuccessTags adds credited-twice for second custom brand credit", asy
       participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
     },
     {
-      JobModel: {
-        countDocuments: async () => 2
-      }
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2", "credited-once"] })
     }
   );
 
@@ -563,10 +559,8 @@ test("creditSuccessTags does not add custom tags for other stores", async () => 
       participant: { phoneDisplay: "9967833007", shopifyCustomerId: "123" }
     },
     {
-      JobModel: {
-        countDocuments: async () => {
-          throw new Error("should not count custom credits for other stores");
-        }
+      fetchCustomerByGid: async () => {
+        throw new Error("should not fetch custom credit tags for other stores");
       }
     }
   );
@@ -676,7 +670,7 @@ test("processCreditJob tags custom brand second credit with credited-twice", asy
       axiosClient: { post: async () => ({ status: 200 }) },
       addTags: async (_store, gid, tags) => calls.tags.push({ gid, tags }),
       recordEvent: async () => null,
-      JobModel: { countDocuments: async () => 2 }
+      fetchCustomerByGid: async () => ({ tags: ["eligible-qty-2", "credited-once"] })
     }
   );
 
