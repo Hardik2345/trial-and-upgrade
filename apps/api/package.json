@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "cleanup:tmc-discounts": "node src/workers/tmcDiscountCleanupWorker.js",
     "create-admin": "node scripts/createAdmin.js",
+    "purge:soft-deleted": "node scripts/purgeSoftDeleted.js",
     "seed:demo": "node scripts/seedDemo.js",
     "test": "node --test tests/*.test.js"
   },

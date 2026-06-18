@@ -1,6 +1,10 @@
 const TenantStore = require("../models/TenantStore");
 const Campaign = require("../models/Campaign");
 
+function normalizeSlug(slug) {
+  return String(slug || "").trim().toLowerCase();
+}
+
 async function findCampaignBySlugs(storeSlug, campaignSlug) {
   const store = await TenantStore.findOne({ slug: storeSlug, enabled: true, deletedAt: null });
   if (!store) {
@@ -20,7 +24,7 @@ async function findCampaignBySlugs(storeSlug, campaignSlug) {
 function pickReward(campaign) {
   const rewards = campaign.rewards?.length
     ? campaign.rewards
-    : [{ key: "wallet_399", label: "Wallet Credit", value: campaign.flitsCredit?.value || 399, weight: 1 }];
+    : [{ key: `wallet_${campaign.flitsCredit?.value || 399}`, label: "Wallet Credit", value: campaign.flitsCredit?.value || 399, weight: 1 }];
   const total = rewards.reduce((sum, reward) => sum + Math.max(0, reward.weight || 0), 0);
   let random = Math.random() * (total || 1);
   for (const reward of rewards) {
@@ -39,4 +43,30 @@ function funnelStages(campaign) {
   ];
 }
 
-module.exports = { findCampaignBySlugs, pickReward, funnelStages };
+async function createOrReactivateCampaign(input, { CampaignModel = Campaign } = {}) {
+  const tenantStoreId = input.tenantStoreId;
+  const slug = normalizeSlug(input.slug);
+  const existing = await CampaignModel.findOne({ tenantStoreId, slug });
+
+  if (existing?.deletedAt) {
+    Object.assign(existing, input, {
+      tenantStoreId,
+      slug,
+      enabled: input.enabled !== undefined ? input.enabled : true,
+      deletedAt: null
+    });
+    await existing.save();
+    return { campaign: existing, reactivated: true };
+  }
+
+  if (existing) {
+    const error = new Error("Campaign slug already exists");
+    error.status = 409;
+    throw error;
+  }
+
+  const campaign = await CampaignModel.create({ ...input, slug });
+  return { campaign, reactivated: false };
+}
+
+module.exports = { findCampaignBySlugs, pickReward, funnelStages, createOrReactivateCampaign };

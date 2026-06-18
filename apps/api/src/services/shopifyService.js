@@ -40,6 +40,22 @@ function customerHasAnyTag(customer, tags) {
   return normalizedTags.some((tag) => customerTags.includes(tag));
 }
 
+function normalizePhoneDigits(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length > 10 && digits.startsWith("91")) return digits.slice(-10);
+  return digits;
+}
+
+function customerContactPhoneMatches(customer, phone) {
+  const expected = normalizePhoneDigits(phone);
+  if (!expected) return false;
+  return normalizePhoneDigits(customer?.phone) === expected;
+}
+
+function pickContactPhoneCustomer(candidates, phone) {
+  return (candidates || []).find((customer) => customerContactPhoneMatches(customer, phone)) || null;
+}
+
 async function findCustomer(store, { email, phone }) {
   const queryText = email ? `email:${email}` : `phone:${phone}`;
   console.log("[shopify] customer lookup", {
@@ -95,6 +111,22 @@ async function findCustomers(store, { email, phone, limit = 10 }) {
     customerIds: customers.map((customer) => customer.numericId)
   });
   return customers;
+}
+
+async function getCustomerByGid(store, customerGid) {
+  if (!customerGid) return null;
+  const data = await graphql(
+    store,
+    `query GetCustomer($id: ID!) {
+      customer(id: $id) {
+        id email phone tags firstName lastName
+      }
+    }`,
+    { id: customerGid }
+  );
+  const customer = data?.customer;
+  if (!customer) return null;
+  return { ...customer, numericId: numericCustomerId(customer.id) };
 }
 
 async function resolveUserLookupCustomer(store, { phone, email, flitsEligibleTags = [] }) {
@@ -218,11 +250,12 @@ async function findOrCreateCustomer(store, details) {
     };
   } catch (err) {
     if (/phone.*taken/i.test(err.message) && details.phone) {
-      const phoneCustomer = await findCustomer(store, { phone: details.phone });
+      const phoneCandidates = await findCustomers(store, { phone: details.phone, limit: 20 });
+      const phoneCustomer = pickContactPhoneCustomer(phoneCandidates, details.phone);
       if (phoneCustomer) {
         console.log("[shopify] customer present", {
           store: store?.slug,
-          match: "phone",
+          match: "phone-contact",
           customerId: phoneCustomer.numericId
         });
         return {
@@ -232,6 +265,14 @@ async function findOrCreateCustomer(store, details) {
           phoneCollision: true
         };
       }
+      console.log("[shopify] phone collision customer not resolved", {
+        store: store?.slug,
+        phone: details.phone,
+        candidates: phoneCandidates.map((customer) => ({
+          customerId: customer.numericId,
+          hasContactPhoneMatch: customerContactPhoneMatches(customer, details.phone)
+        }))
+      });
     }
     console.log("[shopify] customer create error", {
       store: store?.slug,
@@ -262,4 +303,15 @@ async function addCustomerTags(store, customerGid, tags) {
   return data?.tagsAdd?.node;
 }
 
-module.exports = { findCustomer, findCustomers, resolveUserLookupCustomer, findOrCreateCustomer, addCustomerTags, numericCustomerId };
+module.exports = {
+  findCustomer,
+  findCustomers,
+  getCustomerByGid,
+  resolveUserLookupCustomer,
+  findOrCreateCustomer,
+  addCustomerTags,
+  numericCustomerId,
+  normalizePhoneDigits,
+  customerContactPhoneMatches,
+  pickContactPhoneCustomer
+};

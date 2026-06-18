@@ -10,16 +10,47 @@ export function getAccessToken() {
   return accessToken;
 }
 
-export async function apiFetch(path, options = {}) {
+async function refreshAccessToken() {
+  const response = await fetch(`${baseUrl}/api/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" }
+  });
+  if (!response.ok) {
+    setAccessToken("");
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || "Session expired");
+  }
+  const data = await response.json();
+  setAccessToken(data.accessToken);
+  return data;
+}
+
+function shouldRefreshAuth(path, options, response) {
+  if (response.status !== 401 || options.skipAuthRefresh) return false;
+  return !["/api/auth/login", "/api/auth/logout", "/api/auth/refresh"].includes(path);
+}
+
+async function request(path, options = {}) {
+  const { skipAuthRefresh, ...fetchOptions } = options;
   const response = await fetch(`${baseUrl}${path}`, {
-    ...options,
+    ...fetchOptions,
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...(options.headers || {})
+      ...(fetchOptions.headers || {})
     }
   });
+  return response;
+}
+
+export async function apiFetch(path, options = {}) {
+  let response = await request(path, options);
+  if (shouldRefreshAuth(path, options, response)) {
+    await refreshAccessToken();
+    response = await request(path, { ...options, skipAuthRefresh: true });
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || `Request failed: ${response.status}`);
@@ -28,10 +59,17 @@ export async function apiFetch(path, options = {}) {
 }
 
 export async function downloadCsv(path, filename) {
-  const response = await fetch(`${baseUrl}${path}`, {
+  let response = await fetch(`${baseUrl}${path}`, {
     credentials: "include",
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
   });
+  if (response.status === 401) {
+    await refreshAccessToken();
+    response = await fetch(`${baseUrl}${path}`, {
+      credentials: "include",
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+    });
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || `Download failed: ${response.status}`);

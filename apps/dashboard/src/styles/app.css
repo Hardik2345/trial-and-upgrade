@@ -173,6 +173,17 @@ h1 {
   background: #dcfce7;
 }
 
+.toast {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 50;
+  min-width: 260px;
+  max-width: min(420px, calc(100vw - 48px));
+  margin: 0;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+}
+
 .error-banner {
   color: #991b1b;
   background: #fee2e2;
@@ -671,6 +682,49 @@ th:first-child {
   text-align: center;
 }
 
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  color: #475569;
+  font-weight: 800;
+}
+
+.pagination-bar label,
+.pagination-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pagination-bar select {
+  height: 36px;
+  min-width: 76px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #fff;
+  font-weight: 800;
+}
+
+.pagination-actions button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #334155;
+  background: #fff;
+  font-weight: 800;
+}
+
+.pagination-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .funnel-section {
   display: grid;
   gap: 18px;
@@ -840,7 +894,9 @@ th:first-child {
   }
 
   .page-header,
-  .action-row {
+  .action-row,
+  .pagination-bar,
+  .pagination-actions {
     display: grid;
   }
 

@@ -15,7 +15,11 @@ const OtpChallengeSchema = new mongoose.Schema(
     shopifyCustomerGid: String,
     eligibilityCustomerId: String,
     eligibilityCustomerGid: String,
+    creditCustomerId: String,
+    creditCustomerGid: String,
+    creditCustomerEmail: String,
     phoneCollision: { type: Boolean, default: false },
+    customerSource: { type: String, enum: ["existing", "marketplace"], default: "existing" },
     alreadyRedeemed: { type: Boolean, default: false },
     verifiedAt: Date,
     expiresAt: { type: Date, required: true, index: { expires: 0 } }

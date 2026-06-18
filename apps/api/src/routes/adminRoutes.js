@@ -8,8 +8,9 @@ const AdminUser = require("../models/AdminUser");
 const RefreshToken = require("../models/RefreshToken");
 const SmsDeliveryLog = require("../models/SmsDeliveryLog");
 const { requireAuth, requireSuperAdmin, canAccessStore } = require("../middleware/auth");
-const { funnelStages } = require("../services/campaignService");
+const { funnelStages, createOrReactivateCampaign } = require("../services/campaignService");
 const { toCSV } = require("../utils/csv");
+const { parsePagination, paginationMeta } = require("../utils/pagination");
 
 const router = express.Router();
 router.use(requireAuth);
@@ -243,8 +244,8 @@ router.post("/campaigns", requireSuperAdmin, async (req, res, next) => {
   try {
     const store = await TenantStore.findOne({ _id: req.body.tenantStoreId, deletedAt: null });
     if (!store) return res.status(404).json({ error: "Store not found" });
-    const campaign = await Campaign.create(req.body);
-    res.status(201).json({ campaign });
+    const { campaign, reactivated } = await createOrReactivateCampaign(req.body);
+    res.status(reactivated ? 200 : 201).json({ campaign, reactivated });
   } catch (err) {
     next(err);
   }
@@ -254,7 +255,7 @@ router.patch("/campaigns/:campaignId", requireSuperAdmin, async (req, res, next)
   try {
     const campaign = await Campaign.findOne({ _id: req.params.campaignId, deletedAt: null });
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
-    for (const field of ["name", "slug", "mechanicType", "playEventLabel", "otpLength", "otpTtlMinutes", "eligibilityTags", "postPlayTags", "flitsCredit", "enabled", "rewards"]) {
+    for (const field of ["name", "slug", "mechanicType", "playEventLabel", "otpLength", "otpTtlMinutes", "eligibilityTags", "postPlayTags", "flitsCredit", "customCredit", "enabled", "rewards"]) {
       if (req.body[field] !== undefined) campaign[field] = req.body[field];
     }
     await campaign.save();
@@ -359,8 +360,7 @@ router.get("/funnel-stats", async (req, res, next) => {
     const { start, end } = parseDateRange(req.query);
     const eventType = req.query.eventType;
     if (!eventType || eventType === "funnel") return res.status(400).json({ error: "eventType is required" });
-    const page = Math.max(1, Number(req.query.page || 1));
-    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const pagination = parsePagination(req.query, { defaultLimit: 25, maxLimit: 200 });
     const filter = {
       tenantStoreId: req.query.storeId,
       campaignId: campaign._id,
@@ -371,15 +371,16 @@ router.get("/funnel-stats", async (req, res, next) => {
 
     const [total, events] = await Promise.all([
       FunnelEvent.countDocuments(filter),
-      FunnelEvent.find(filter).sort({ occurredAt: -1 }).skip((page - 1) * limit).limit(limit)
+      FunnelEvent.find(filter).sort({ occurredAt: -1 }).skip(pagination.skip).limit(pagination.limit)
     ]);
     res.json({
       total,
-      page,
-      limit,
+      page: pagination.page,
+      limit: pagination.limit,
+      pagination: paginationMeta({ total, page: pagination.page, limit: pagination.limit }),
       label: eventType === "played" ? campaign.playEventLabel : eventType,
       rows: events.map((event, index) => ({
-        index: (page - 1) * limit + index + 1,
+        index: pagination.skip + index + 1,
         name: event.name,
         mobile: event.mobile,
         timestamp: event.occurredAt

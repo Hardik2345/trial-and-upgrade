@@ -13,7 +13,11 @@ const ParticipantSchema = new mongoose.Schema(
     shopifyCustomerGid: String,
     eligibilityCustomerId: String,
     eligibilityCustomerGid: String,
+    creditCustomerId: String,
+    creditCustomerGid: String,
+    creditCustomerEmail: { type: String, lowercase: true, trim: true },
     phoneCollision: { type: Boolean, default: false },
+    customerSource: { type: String, enum: ["existing", "marketplace"], default: "existing" },
     reward: {
       key: String,
       label: String,

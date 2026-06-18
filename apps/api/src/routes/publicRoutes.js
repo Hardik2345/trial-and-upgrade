@@ -9,7 +9,7 @@ const env = require("../config/env");
 const { findCampaignBySlugs, pickReward } = require("../services/campaignService");
 const { buildOtp, sendOtpSms } = require("../services/otpService");
 const { findOrCreateCustomer, addCustomerTags, resolveUserLookupCustomer } = require("../services/shopifyService");
-const { enqueueCredit } = require("../services/flitsService");
+const { enqueueCredit, isCustomCreditLimitStore, creditResult } = require("../services/flitsService");
 const { lookupFlitsCredits } = require("../services/flitsLookupService");
 const { recordFunnelEvent } = require("../services/funnelService");
 const { normalizePhone, maskPhone, hashPhone, sha256 } = require("../utils/crypto");
@@ -51,6 +51,33 @@ function customerName(customer) {
   return [customer.firstName, customer.lastName].filter(Boolean).join(" ").trim();
 }
 
+function customerSourceFromShopifyResult(shopifyResult) {
+  if (shopifyResult.created) return "marketplace";
+  return "existing";
+}
+
+function postPlayTagsForParticipant(store, campaign, participant) {
+  const tags = [...(campaign.postPlayTags || [])];
+  if (isCustomCreditLimitStore(store) && participant.customerSource === "marketplace") {
+    tags.push("marketplace");
+  }
+  return [...new Set(tags)];
+}
+
+async function refreshParticipantCustomerContext(participant, challenge) {
+  participant.shopifyCustomerId = challenge.shopifyCustomerId;
+  participant.shopifyCustomerGid = challenge.shopifyCustomerGid;
+  participant.eligibilityCustomerId = challenge.eligibilityCustomerId;
+  participant.eligibilityCustomerGid = challenge.eligibilityCustomerGid;
+  participant.creditCustomerId = challenge.creditCustomerId;
+  participant.creditCustomerGid = challenge.creditCustomerGid;
+  participant.creditCustomerEmail = challenge.creditCustomerEmail;
+  participant.phoneCollision = challenge.phoneCollision;
+  participant.customerSource = challenge.customerSource;
+  await participant.save();
+  return participant;
+}
+
 async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   const shopifyResult = await findOrCreateCustomer(store, {
     name: challenge.name,
@@ -59,6 +86,8 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   });
   const eligibilityCustomer = shopifyResult.eligibilityCustomer || shopifyResult.primaryCustomer;
   const primaryCustomer = shopifyResult.primaryCustomer;
+  const creditCustomer = eligibilityCustomer || primaryCustomer;
+  const customerSource = customerSourceFromShopifyResult(shopifyResult);
   const tags = eligibilityCustomer?.tags || [];
   const alreadyRedeemed = campaign.eligibilityTags.some((tag) => tags.includes(tag));
 
@@ -66,11 +95,15 @@ async function hydrateChallengeCustomerContext(store, campaign, challenge) {
   challenge.shopifyCustomerGid = primaryCustomer?.id || "";
   challenge.eligibilityCustomerId = eligibilityCustomer?.numericId || "";
   challenge.eligibilityCustomerGid = eligibilityCustomer?.id || "";
+  challenge.creditCustomerId = creditCustomer?.numericId || "";
+  challenge.creditCustomerGid = creditCustomer?.id || "";
+  challenge.creditCustomerEmail = creditCustomer?.email || "";
   challenge.phoneCollision = Boolean(shopifyResult.phoneCollision);
+  challenge.customerSource = customerSource;
   challenge.alreadyRedeemed = alreadyRedeemed;
   await challenge.save();
 
-  return { alreadyRedeemed };
+  return { alreadyRedeemed, customerSource };
 }
 
 async function findStoreBySlug(storeSlug) {
@@ -310,12 +343,16 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
     challenge.verifiedAt = new Date();
     await challenge.save();
     await hydrateChallengeCustomerContext(store, campaign, challenge);
-    if (challenge.alreadyRedeemed) {
+    const customCreditLimitStore = isCustomCreditLimitStore(store);
+    if (challenge.alreadyRedeemed && !customCreditLimitStore) {
+      const credit = creditResult({ reason: "already_redeemed" });
       return res.json({
         success: true,
         verified: true,
         alreadyPlayed: true,
-        message: "This mobile number has already played"
+        message: "This mobile number has already played",
+        creditJobId: credit.creditJobId,
+        credit
       });
     }
     await recordFunnelEvent({
@@ -329,6 +366,7 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         phoneHash: challenge.phoneHash
       }
     });
+    let credit = null;
     if (store.game_enabled === false) {
       const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
       if (!existing?.playedAt) {
@@ -344,7 +382,11 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
           shopifyCustomerGid: challenge.shopifyCustomerGid,
           eligibilityCustomerId: challenge.eligibilityCustomerId,
           eligibilityCustomerGid: challenge.eligibilityCustomerGid,
+          creditCustomerId: challenge.creditCustomerId,
+          creditCustomerGid: challenge.creditCustomerGid,
+          creditCustomerEmail: challenge.creditCustomerEmail,
           phoneCollision: challenge.phoneCollision,
+          customerSource: challenge.customerSource,
           reward: {
             key: `wallet_${campaign.flitsCredit?.value || 0}`,
             label: "Wallet Credit",
@@ -357,13 +399,18 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
           playedAt: new Date()
         });
         const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
-        await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
+        await addCustomerTags(store, tagTargetGid, postPlayTagsForParticipant(store, campaign, participant));
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
-        await enqueueCredit({ store, campaign, participant });
+        credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
+      } else if (customCreditLimitStore) {
+        const refreshed = await refreshParticipantCustomerContext(existing, challenge);
+        credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
+      } else {
+        credit = creditResult({ reason: "already_played" });
       }
       await OtpChallenge.deleteOne({ _id: challenge._id });
     }
-    res.json({ success: true, verified: true });
+    res.json({ success: true, verified: true, ...(credit ? { alreadyPlayed: !credit.credited && credit.reason === "already_played", credit, creditJobId: credit.creditJobId } : {}) });
   } catch (err) {
     next(err);
   }
@@ -381,9 +428,39 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
     if (!challenge.eligibilityCustomerId && !challenge.shopifyCustomerId) {
       await hydrateChallengeCustomerContext(store, campaign, challenge);
     }
-    if (challenge.alreadyRedeemed) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    const customCreditLimitStore = isCustomCreditLimitStore(store);
+    if (challenge.alreadyRedeemed && !customCreditLimitStore) {
+      const credit = creditResult({ reason: "already_redeemed" });
+      return res.status(409).json({
+        error: "This mobile number has already played",
+        alreadyPlayed: true,
+        creditJobId: credit.creditJobId,
+        credit
+      });
+    }
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
-    if (existing?.playedAt) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (existing?.playedAt) {
+      if (!customCreditLimitStore) {
+        const credit = creditResult({ reason: "already_played" });
+        return res.status(409).json({
+          error: "This mobile number has already played",
+          alreadyPlayed: true,
+          participantId: existing._id,
+          creditJobId: credit.creditJobId,
+          credit
+        });
+      }
+      const refreshed = await refreshParticipantCustomerContext(existing, challenge);
+      const credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
+      await OtpChallenge.deleteOne({ _id: challenge._id });
+      return res.json({
+        success: true,
+        reward: existing.reward,
+        participantId: existing._id,
+        creditJobId: credit.creditJobId,
+        credit
+      });
+    }
 
     const reward = pickReward(campaign);
     const participant = await Participant.create({
@@ -398,7 +475,11 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       shopifyCustomerGid: challenge.shopifyCustomerGid,
       eligibilityCustomerId: challenge.eligibilityCustomerId,
       eligibilityCustomerGid: challenge.eligibilityCustomerGid,
+      creditCustomerId: challenge.creditCustomerId,
+      creditCustomerGid: challenge.creditCustomerGid,
+      creditCustomerEmail: challenge.creditCustomerEmail,
       phoneCollision: challenge.phoneCollision,
+      customerSource: challenge.customerSource,
       reward: {
         key: reward.key,
         label: reward.label,
@@ -412,18 +493,29 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
       playedAt: new Date()
     });
     const tagTargetGid = participant.shopifyCustomerGid || participant.eligibilityCustomerGid;
-    await addCustomerTags(store, tagTargetGid, campaign.postPlayTags);
+    await addCustomerTags(store, tagTargetGid, postPlayTagsForParticipant(store, campaign, participant));
     await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
-    const creditJob = challenge.alreadyRedeemed ? null : await enqueueCredit({ store, campaign, participant });
+    const credit = challenge.alreadyRedeemed
+      ? creditResult({ reason: "already_redeemed" })
+      : await enqueueCredit({ store, campaign, participant }, { includeResult: true });
     await OtpChallenge.deleteOne({ _id: challenge._id });
     res.json({
       success: true,
       reward: participant.reward,
       participantId: participant._id,
-      creditJobId: creditJob?._id
+      creditJobId: credit.creditJobId,
+      credit
     });
   } catch (err) {
-    if (err.code === 11000) return res.status(409).json({ error: "This mobile number has already played", alreadyPlayed: true });
+    if (err.code === 11000) {
+      const credit = creditResult({ reason: "already_played" });
+      return res.status(409).json({
+        error: "This mobile number has already played",
+        alreadyPlayed: true,
+        creditJobId: credit.creditJobId,
+        credit
+      });
+    }
     next(err);
   }
 });
