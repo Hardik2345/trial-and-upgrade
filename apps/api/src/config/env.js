@@ -29,6 +29,7 @@ const env = {
   tmcAdminApi: process.env.TMC_ADMIN_API || "",
   tmcAccessToken: process.env.TMC_ACCESS_TOKEN || "",
   defaultTmcDiscountExpirationTime: Number(process.env.DEFAULT_TMC_DISCOUNT_EXPIRATION_TIME || 5),
+  tmcDefaultDiscountPrefix: process.env.TMC_DEFAULT_DISCOUNT_PREFIX || "TMC",
   discountCodesCleanupCron: process.env.DISCOUNT_CODES_CLEANUP_CRON || "0 0 * * *",
   flitsQueueEnabled: process.env.FLITS_QUEUE_ENABLED !== "false",
   flitsQueueIntervalMs: numberEnv("FLITS_QUEUE_INTERVAL_MS", 15000),

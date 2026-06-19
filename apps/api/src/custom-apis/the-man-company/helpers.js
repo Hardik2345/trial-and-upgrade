@@ -10,6 +10,9 @@ function assertTmcConfig(env) {
   if (!Number.isInteger(env.defaultTmcDiscountExpirationTime) || env.defaultTmcDiscountExpirationTime <= 0) {
     throw new Error("DEFAULT_TMC_DISCOUNT_EXPIRATION_TIME must be a positive integer");
   }
+  if (!String(env.tmcDefaultDiscountPrefix || "").trim()) {
+    throw new Error("TMC_DEFAULT_DISCOUNT_PREFIX is required");
+  }
 }
 
 function assertTmcCleanupConfig(env) {
@@ -44,8 +47,8 @@ function randomCodeToken(length = 8) {
     .slice(0, length);
 }
 
-function buildDiscountCode(prefix) {
-  const normalizedPrefix = normalizeCodeToken(prefix);
+function buildDiscountCode(prefix, defaultPrefix) {
+  const normalizedPrefix = normalizeCodeToken(prefix) || normalizeCodeToken(defaultPrefix);
   const suffix = randomCodeToken(8);
   if (!normalizedPrefix) return suffix;
   return `${normalizedPrefix}-${suffix}`;
@@ -82,8 +85,8 @@ function toProductGid(productId) {
   return `gid://shopify/Product/${productId}`;
 }
 
-function buildTmcDiscountTitle({ code, type, dtype }) {
-  return `TMC ${type} ${dtype} discount ${code}`;
+function buildTmcDiscountTitle({ code }) {
+  return code;
 }
 
 function buildIdempotencyKey() {

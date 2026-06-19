@@ -32,6 +32,7 @@ test("assertTmcCleanupConfig validates cron config", () => {
       tmcAdminApi: "https://the-man-company.myshopify.com/admin/api/2026-04/graphql.json",
       tmcAccessToken: "token",
       defaultTmcDiscountExpirationTime: 5,
+      tmcDefaultDiscountPrefix: "TMC",
       discountCodesCleanupCron: "0 0 * * *"
     })
   );
@@ -41,6 +42,7 @@ test("assertTmcCleanupConfig validates cron config", () => {
         tmcAdminApi: "https://the-man-company.myshopify.com/admin/api/2026-04/graphql.json",
         tmcAccessToken: "token",
         defaultTmcDiscountExpirationTime: 5,
+        tmcDefaultDiscountPrefix: "TMC",
         discountCodesCleanupCron: "@daily"
       }),
     /standard 5-field cron expression/

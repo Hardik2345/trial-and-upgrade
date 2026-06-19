@@ -13,6 +13,7 @@ const TmcDiscountCodeSchema = new mongoose.Schema(
     percent: { type: Number, default: null },
     price: { type: Number, default: null },
     prefix: { type: String, default: "", trim: true },
+    orderDiscountCombination: { type: Boolean, default: false },
     durationMinutes: { type: Number, required: true },
     startsAt: { type: Date, required: true },
     expiresAt: { type: Date, required: true, index: true },

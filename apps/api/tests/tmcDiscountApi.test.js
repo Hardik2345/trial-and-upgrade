@@ -16,16 +16,20 @@ const {
 
 test("assertTmcConfig rejects invalid TMC config", () => {
   assert.throws(
-    () => assertTmcConfig({ tmcAdminApi: "", tmcAccessToken: "token", defaultTmcDiscountExpirationTime: 5 }),
+    () => assertTmcConfig({ tmcAdminApi: "", tmcAccessToken: "token", defaultTmcDiscountExpirationTime: 5, tmcDefaultDiscountPrefix: "TMC" }),
     /TMC_ADMIN_API/
   );
   assert.throws(
-    () => assertTmcConfig({ tmcAdminApi: "https://example.myshopify.com/admin/api/2026-04/graphql.json", tmcAccessToken: "", defaultTmcDiscountExpirationTime: 5 }),
+    () => assertTmcConfig({ tmcAdminApi: "https://example.myshopify.com/admin/api/2026-04/graphql.json", tmcAccessToken: "", defaultTmcDiscountExpirationTime: 5, tmcDefaultDiscountPrefix: "TMC" }),
     /TMC_ACCESS_TOKEN/
   );
   assert.throws(
-    () => assertTmcConfig({ tmcAdminApi: "https://example.myshopify.com/admin/api/2026-04/graphql.json", tmcAccessToken: "token", defaultTmcDiscountExpirationTime: 0 }),
+    () => assertTmcConfig({ tmcAdminApi: "https://example.myshopify.com/admin/api/2026-04/graphql.json", tmcAccessToken: "token", defaultTmcDiscountExpirationTime: 0, tmcDefaultDiscountPrefix: "TMC" }),
     /DEFAULT_TMC_DISCOUNT_EXPIRATION_TIME/
+  );
+  assert.throws(
+    () => assertTmcConfig({ tmcAdminApi: "https://example.myshopify.com/admin/api/2026-04/graphql.json", tmcAccessToken: "token", defaultTmcDiscountExpirationTime: 5, tmcDefaultDiscountPrefix: "" }),
+    /TMC_DEFAULT_DISCOUNT_PREFIX/
   );
 });
 
@@ -37,8 +41,8 @@ test("extractShopFromAdminApi returns the Shopify hostname", () => {
 });
 
 test("buildDiscountCode preserves prefix and falls back to random", () => {
-  assert.match(buildDiscountCode("tmc"), /^TMC-[A-Z0-9]{8}$/);
-  assert.match(buildDiscountCode(""), /^[A-Z0-9]{8}$/);
+  assert.match(buildDiscountCode("tmc", "FALLBACK"), /^TMC-[A-Z0-9]{8}$/);
+  assert.match(buildDiscountCode("", "FALLBACK"), /^FALLBACK-[A-Z0-9]{8}$/);
 });
 
 test("normalizeDuration uses default when omitted", () => {
@@ -55,7 +59,7 @@ test("product ids are normalized to Shopify product gids", () => {
 
 test("parseRequestPayload validates conditional fields and applies defaults", () => {
   const parsed = parseRequestPayload(
-    { type: "product", product_id: "12345", dtype: "percent", percent: 5 },
+    { type: "product", product_id: "12345", dtype: "percent", percent: 5, order_discount_combination: true },
     6
   );
   assert.equal(parsed.type, "product");
@@ -63,10 +67,14 @@ test("parseRequestPayload validates conditional fields and applies defaults", ()
   assert.equal(parsed.productGid, "gid://shopify/Product/12345");
   assert.equal(parsed.percent, 5);
   assert.equal(parsed.durationMinutes, 6);
+  assert.equal(parsed.orderDiscountCombination, true);
+  assert.match(parsed.code, /^TMC-[A-Z0-9]{8}$/);
+  assert.equal(parsed.prefix, "TMC");
 
   assert.throws(() => parseRequestPayload({ type: "product", dtype: "percent", percent: 5 }, 6), /product_id/);
   assert.throws(() => parseRequestPayload({ type: "cart", dtype: "percent" }, 6), /percent/);
   assert.throws(() => parseRequestPayload({ type: "cart", dtype: "fixed" }, 6), /price/);
+  assert.throws(() => parseRequestPayload({ type: "product", product_id: "12345", dtype: "percent", percent: 5, order_discount_combination: "true" }, 6), /order_discount_combination/);
 });
 
 test("buildCustomerGets shapes cart and product discounts correctly", () => {
@@ -84,7 +92,7 @@ test("buildCustomerGets shapes cart and product discounts correctly", () => {
   );
 });
 
-test("buildShopifyDiscountInput creates an all-buyers discount with expiry", () => {
+test("buildShopifyDiscountInput creates an all-buyers cart discount with expiry", () => {
   const now = new Date("2026-06-18T10:00:00.000Z");
   const result = buildShopifyDiscountInput(
     {
@@ -97,9 +105,35 @@ test("buildShopifyDiscountInput creates an all-buyers discount with expiry", () 
     now
   );
 
+  assert.equal(result.title, "TMC-TEST");
   assert.equal(result.input.context.all, "ALL");
+  assert.equal(result.input.appliesOncePerCustomer, false);
+  assert.equal(result.input.combinesWith.orderDiscounts, false);
   assert.equal(result.input.customerGets.items.all, true);
   assert.equal(result.input.customerGets.value.discountAmount.amount, "100.00");
   assert.equal(result.startsAt.toISOString(), "2026-06-18T10:00:00.000Z");
   assert.equal(result.expiresAt.toISOString(), "2026-06-18T10:05:00.000Z");
+});
+
+test("buildShopifyDiscountInput creates a product discount with one-use-per-customer and order combination control", () => {
+  const now = new Date("2026-06-18T10:00:00.000Z");
+  const result = buildShopifyDiscountInput(
+    {
+      type: "product",
+      dtype: "percent",
+      percent: 10,
+      code: "TMC-PRODUCT",
+      productGid: "gid://shopify/Product/123",
+      durationMinutes: 5,
+      orderDiscountCombination: true
+    },
+    now
+  );
+
+  assert.equal(result.title, "TMC-PRODUCT");
+  assert.equal(result.input.appliesOncePerCustomer, true);
+  assert.equal(result.input.combinesWith.orderDiscounts, true);
+  assert.equal(result.input.combinesWith.productDiscounts, false);
+  assert.equal(result.input.combinesWith.shippingDiscounts, false);
+  assert.deepEqual(result.input.customerGets.items, { products: { productsToAdd: ["gid://shopify/Product/123"] } });
 });

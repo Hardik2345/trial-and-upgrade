@@ -54,18 +54,20 @@ function parseRequestPayload(payload, defaultDuration) {
   }
 
   const durationMinutes = normalizeDuration(payload.duration, defaultDuration);
-  const code = buildDiscountCode(payload.prefix);
   const prefix = String(payload.prefix || "").trim();
+  const effectivePrefix = prefix || env.tmcDefaultDiscountPrefix;
+  const code = buildDiscountCode(prefix, env.tmcDefaultDiscountPrefix);
   const parsed = {
     type,
     dtype,
     code,
-    prefix,
+    prefix: effectivePrefix,
     durationMinutes,
     productIdNumeric: "",
     productGid: "",
     percent: null,
-    price: null
+    price: null,
+    orderDiscountCombination: false
   };
 
   if (type === "product") {
@@ -91,6 +93,15 @@ function parseRequestPayload(payload, defaultDuration) {
       throw error;
     }
     parsed.price = price;
+  }
+
+  if (type === "product") {
+    if (payload.order_discount_combination !== undefined && typeof payload.order_discount_combination !== "boolean") {
+      const error = new Error("order_discount_combination must be a boolean");
+      error.status = 400;
+      throw error;
+    }
+    parsed.orderDiscountCombination = Boolean(payload.order_discount_combination);
   }
 
   return parsed;
@@ -127,7 +138,13 @@ function buildShopifyDiscountInput(payload, now = new Date()) {
       code: payload.code,
       startsAt: startsAt.toISOString(),
       endsAt: expiresAt.toISOString(),
+      appliesOncePerCustomer: payload.type === "product",
       context: { all: "ALL" },
+      combinesWith: {
+        orderDiscounts: payload.type === "product" ? payload.orderDiscountCombination : false,
+        productDiscounts: false,
+        shippingDiscounts: false
+      },
       customerGets: buildCustomerGets(payload)
     }
   };
@@ -207,6 +224,7 @@ async function createTmcDiscount(requestBody) {
     percent: parsedPayload.percent,
     price: parsedPayload.price,
     prefix: parsedPayload.prefix,
+    orderDiscountCombination: parsedPayload.orderDiscountCombination,
     durationMinutes: parsedPayload.durationMinutes,
     startsAt: createdDiscount.startsAt,
     expiresAt: createdDiscount.expiresAt,
