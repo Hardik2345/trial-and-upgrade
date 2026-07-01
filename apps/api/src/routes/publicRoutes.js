@@ -402,11 +402,11 @@ router.post("/:storeSlug/:campaignSlug/verify-otp", async (req, res, next) => {
         await addCustomerTags(store, tagTargetGid, postPlayTagsForParticipant(store, campaign, participant));
         await recordFunnelEvent({ store, campaign, participant, eventType: "played" });
         credit = await enqueueCredit({ store, campaign, participant }, { includeResult: true });
-      } else if (customCreditLimitStore) {
+      } else {
+        // DB is audit-only: a prior participant no longer blocks. Reaching here means
+        // the eligibility-tag gate (alreadyRedeemed) was passed, so re-credit both brands.
         const refreshed = await refreshParticipantCustomerContext(existing, challenge);
         credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
-      } else {
-        credit = creditResult({ reason: "already_played" });
       }
       await OtpChallenge.deleteOne({ _id: challenge._id });
     }
@@ -438,18 +438,12 @@ router.post("/:storeSlug/:campaignSlug/play", async (req, res, next) => {
         credit
       });
     }
+    // DB is audit-only: repeat plays are no longer blocked here. Normal brands are
+    // gated upstream by the eligibility tags (alreadyRedeemed); reaching this point
+    // means they lack that tag, so they are re-credited like the custom brand. The
+    // unique index remains as a race guard for concurrent brand-new inserts.
     const existing = await Participant.findOne({ tenantStoreId: store._id, campaignId: campaign._id, phoneHash: challenge.phoneHash });
     if (existing?.playedAt) {
-      if (!customCreditLimitStore) {
-        const credit = creditResult({ reason: "already_played" });
-        return res.status(409).json({
-          error: "This mobile number has already played",
-          alreadyPlayed: true,
-          participantId: existing._id,
-          creditJobId: credit.creditJobId,
-          credit
-        });
-      }
       const refreshed = await refreshParticipantCustomerContext(existing, challenge);
       const credit = await enqueueCredit({ store, campaign, participant: refreshed }, { includeResult: true });
       await OtpChallenge.deleteOne({ _id: challenge._id });

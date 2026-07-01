@@ -585,7 +585,8 @@ function CampaignCreatePanel({ storeId, onCreated }) {
     rewardValue: "399",
     eligibilityTags: "played",
     flitsCreditEnabled: true,
-    marketplaceAutoCreditEnabled: false
+    marketplaceAutoCreditEnabled: false,
+    marketplaceOnlyCredit: false
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -612,7 +613,7 @@ function CampaignCreatePanel({ storeId, onCreated }) {
           eligibilityTags: parseTags(form.eligibilityTags),
           postPlayTags: ["played"],
           flitsCredit: { enabled: form.flitsCreditEnabled, value: rewardValue, commentText: `Rewarding the user ${rewardValue} in wallet` },
-          customCredit: { marketplaceAutoCreditEnabled: form.marketplaceAutoCreditEnabled }
+          customCredit: { marketplaceAutoCreditEnabled: form.marketplaceAutoCreditEnabled, marketplaceOnlyCredit: form.marketplaceOnlyCredit }
         })
       });
       setForm({
@@ -622,7 +623,8 @@ function CampaignCreatePanel({ storeId, onCreated }) {
         rewardValue: "399",
         eligibilityTags: "played",
         flitsCreditEnabled: true,
-        marketplaceAutoCreditEnabled: false
+        marketplaceAutoCreditEnabled: false,
+        marketplaceOnlyCredit: false
       });
       onCreated(campaign);
     } catch (err) {
@@ -643,6 +645,7 @@ function CampaignCreatePanel({ storeId, onCreated }) {
         <Field label="Eligibility Tags"><input value={form.eligibilityTags} onChange={(event) => update("eligibilityTags", event.target.value)} placeholder="played, credited" /></Field>
         <label className="checkbox-field"><input type="checkbox" checked={form.flitsCreditEnabled} onChange={(event) => update("flitsCreditEnabled", event.target.checked)} /> Flits wallet credit</label>
         <label className="checkbox-field"><input type="checkbox" checked={form.marketplaceAutoCreditEnabled} onChange={(event) => update("marketplaceAutoCreditEnabled", event.target.checked)} /> Marketplace auto credit</label>
+        <label className="checkbox-field"><input type="checkbox" checked={form.marketplaceOnlyCredit} onChange={(event) => update("marketplaceOnlyCredit", event.target.checked)} /> Credit marketplace only</label>
       </div>
       {error ? <p className="error">{error}</p> : null}
       <button className="mini-button" disabled={saving}><Plus size={16} /> Create Campaign</button>
@@ -667,6 +670,7 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
   const [walletValue, setWalletValue] = useState(campaignWalletValue(campaign));
   const [flitsCreditEnabled, setFlitsCreditEnabled] = useState(campaign.flitsCredit?.enabled !== false);
   const [marketplaceAutoCreditEnabled, setMarketplaceAutoCreditEnabled] = useState(campaign.customCredit?.marketplaceAutoCreditEnabled === true);
+  const [marketplaceOnlyCredit, setMarketplaceOnlyCredit] = useState(campaign.customCredit?.marketplaceOnlyCredit === true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -675,6 +679,7 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
     setWalletValue(campaignWalletValue(campaign));
     setFlitsCreditEnabled(campaign.flitsCredit?.enabled !== false);
     setMarketplaceAutoCreditEnabled(campaign.customCredit?.marketplaceAutoCreditEnabled === true);
+    setMarketplaceOnlyCredit(campaign.customCredit?.marketplaceOnlyCredit === true);
     setError("");
   }, [campaign._id, campaign.eligibilityTags, campaign.rewards, campaign.flitsCredit, campaign.customCredit]);
 
@@ -696,7 +701,8 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
           },
           customCredit: {
             ...(campaign.customCredit || {}),
-            marketplaceAutoCreditEnabled
+            marketplaceAutoCreditEnabled,
+            marketplaceOnlyCredit
           }
         })
       });
@@ -725,9 +731,10 @@ function CampaignRuleEditor({ campaign, onSaved, onDeleted }) {
       </Field>
       <label className="checkbox-field"><input type="checkbox" checked={flitsCreditEnabled} onChange={(event) => setFlitsCreditEnabled(event.target.checked)} /> Flits wallet credit</label>
       <label className="checkbox-field"><input type="checkbox" checked={marketplaceAutoCreditEnabled} onChange={(event) => setMarketplaceAutoCreditEnabled(event.target.checked)} /> Marketplace auto credit</label>
+      <label className="checkbox-field"><input type="checkbox" checked={marketplaceOnlyCredit} onChange={(event) => setMarketplaceOnlyCredit(event.target.checked)} /> Credit marketplace only</label>
       <div className="campaign-rule-actions">
         <button className="mini-button" onClick={save} disabled={saving}>Save Rules</button>
-        <span>Wallet {Number(walletValue || 0)} · Flits {flitsCreditEnabled ? "on" : "off"} · Marketplace {marketplaceAutoCreditEnabled ? "on" : "off"}</span>
+        <span>Wallet {Number(walletValue || 0)} · Flits {flitsCreditEnabled ? "on" : "off"} · Marketplace {marketplaceAutoCreditEnabled ? "on" : "off"}{marketplaceOnlyCredit ? " · Marketplace-only" : ""}</span>
       </div>
       {error ? <p className="error">{error}</p> : null}
     </article>

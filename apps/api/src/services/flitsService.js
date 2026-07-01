@@ -160,6 +160,8 @@ function creditSkipMessage(reason) {
       return "This mobile number has already played.";
     case "already_played":
       return "This mobile number has already played.";
+    case "non_marketplace_credit_disabled":
+      return "Wallet credit is only issued to marketplace customers for this campaign.";
     default:
       return "Wallet credit was not issued.";
   }
@@ -218,6 +220,16 @@ async function enqueueCredit(
       participantId: participant?._id
     });
     const result = creditResult({ reason: "flits_credit_disabled" });
+    return includeResult ? result : null;
+  }
+  if (campaign.customCredit?.marketplaceOnlyCredit && participant.customerSource !== "marketplace") {
+    logger.info?.("[flits-queue] credit skipped (marketplace-only)", {
+      store: store?.slug,
+      campaignId: campaign?._id,
+      participantId: participant?._id,
+      customerSource: participant?.customerSource
+    });
+    const result = creditResult({ reason: "non_marketplace_credit_disabled" });
     return includeResult ? result : null;
   }
   const creditLimit = await customCreditLimitDecision(
