@@ -58,7 +58,7 @@ function customerSourceFromShopifyResult(shopifyResult) {
 
 function postPlayTagsForParticipant(store, campaign, participant) {
   const tags = [...(campaign.postPlayTags || [])];
-  if (isCustomCreditLimitStore(store) && participant.customerSource === "marketplace") {
+  if (participant.customerSource === "marketplace") {
     tags.push("marketplace");
   }
   return [...new Set(tags)];
