@@ -493,6 +493,37 @@ test("enqueueCredit sends Flits payload with resolved customer email and no phon
   assert.equal(captured.payload.credit_details.time_upto, 30);
 });
 
+test("enqueueCredit delays marketplace customer credit jobs for Flits sync", async () => {
+  let captured;
+  const before = Date.now();
+  await enqueueCredit(
+    {
+      store: { _id: "store-1", slug: "sorrysugar", shopifyDomain: "em52un-mk.myshopify.com" },
+      campaign: { _id: "campaign-1", flitsCredit: { enabled: true, value: 399, commentText: "Reward" } },
+      participant: {
+        _id: "participant-1",
+        phoneDisplay: "9310264384",
+        shopifyCustomerId: "24477883924845",
+        creditCustomerEmail: "ashminsingh21196@gmail.com",
+        customerSource: "marketplace",
+        reward: { value: 399 }
+      }
+    },
+    {
+      JobModel: {
+        create: async (payload) => {
+          captured = payload;
+          return payload;
+        }
+      },
+      logger: { info() {} }
+    }
+  );
+
+  assert.ok(captured.nextRunAt instanceof Date);
+  assert.ok(captured.nextRunAt.getTime() >= before + 15000);
+});
+
 test("enqueueCredit skips when resolved credit email is missing", async () => {
   let createCalled = false;
   const credit = await enqueueCredit(
